@@ -17,7 +17,7 @@ If that fails or shows an older version, install the LTS release from
 **2. Download the code**
 
 ```bash
-git clone -b prototype/mock-ui https://github.com/pac-cee/inventory-platform.git
+git clone https://github.com/pac-cee/inventory-platform.git
 cd inventory-platform
 ```
 
@@ -68,11 +68,8 @@ already filled in, so click **Sign in**. Any email and password also work.
 
 It deploys with no settings:
 
-1. Go to [vercel.com/new](https://vercel.com/new), import this repository and
-   click **Deploy**.
-2. In the project's **Settings → Git**, set **Production Branch** to
-   `prototype/mock-ui`, then redeploy. (The default `main` branch needs the
-   real backend.)
+1. Go to [vercel.com/new](https://vercel.com/new) and import this repository.
+2. Click **Deploy**.
 
 Everyone who opens the link shares the same demo data, and it resets whenever
 the host restarts the app.
