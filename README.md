@@ -1,56 +1,99 @@
-# Inventory Platform — UI prototype
+# Inventory Platform
 
-The web dashboard for an internal inventory and expense system, running entirely
-on mock data. There's no database, no API and nothing to configure.
+A clickable prototype of an inventory and expense dashboard. It runs on its own
+with built-in demo data, so you don't need a database, a server or any setup.
+
+## Get it running
+
+**1. Check you have Node.js 20.9 or newer**
+
+```bash
+node -v
+```
+
+If that fails or shows an older version, install the LTS release from
+[nodejs.org](https://nodejs.org).
+
+**2. Download the code**
+
+```bash
+git clone -b prototype/mock-ui https://github.com/pac-cee/inventory-platform.git
+cd inventory-platform
+```
+
+**3. Install and start**
 
 ```bash
 npm install
-npm run dev        # http://localhost:3000
+npm run dev
 ```
 
-Sign in with the prefilled details (any email and password work).
+**4. Open it**
 
-## What's in it
+Go to [http://localhost:3000](http://localhost:3000). The sign-in form is
+already filled in, so click **Sign in**. Any email and password also work.
 
-- **Office map**: a 3D view of the floor (three.js), with search and a plan editor
-- **Inventory**: the catalog, item details, stock per location, and QR labels
-- **Locations**: areas, shelves, levels and boxes, with printable box labels
-- **Borrowed equipment**: who holds what, due dates and overdue loans
-- **Payments**: expense requests, the monthly budget, and approval history
-- **Reports**: activity, item condition, and expenses, with PDF/CSV export
-- **Users**: roles, invitations and blocking
+## Take the tour
 
-## How the mock works
+| Where | What to try |
+| --- | --- |
+| **Office map** | Drag to orbit the 3D floor, scroll to zoom, switch between **3D** and **Plan**, search for an item |
+| **Inventory** | Open an item to see its stock, who has it, and its history. Use **Add item** to create one |
+| **Locations** | Browse areas, shelves and boxes. **Print labels** makes QR stickers for boxes |
+| **Borrowed** | See who holds what and which loans are overdue. Export the list as CSV |
+| **Payments** | Look through expense requests, the monthly budget and the transaction history |
+| **Reports** | Activity, item condition and expenses, each exportable to PDF or CSV |
+| **People** | Add someone, change a role, or block an account |
 
-Every call the app makes to its backend is answered by `src/lib/api/mock/`
-from responses recorded off a real run with demo data (`fixtures.json`).
-Dates are shifted so due dates and "this month" always line up with today.
+## Good to know
 
-- Adding, editing and deleting items, locations and people works, and stays
-  until the server restarts.
-- Stock actions (take, return, transfer, mark damaged) succeed but don't change
-  the counts.
-- Photo uploads are accepted but not shown.
+- **Your changes are temporary.** New or edited items, locations and people
+  stay until you stop the server. Starting again brings back the original
+  demo data.
+- **Stock numbers don't move.** Taking, returning or transferring stock shows
+  as successful but leaves the counts as they were.
+- **Photos aren't kept.** Uploads go through, but no image is shown afterwards.
+- **Dates stay current.** Due dates and "this month" always line up with today.
 
-To use a real backend instead, set `API_URL` to a running inventory-api
-(see `.env.example`). `MOCK_API=1` or `MOCK_API=0` forces the choice.
+## Something not working?
 
-## Stack
+- **`Port 3000 is in use`**: run `npm run dev -- -p 3001` and open
+  http://localhost:3001 instead.
+- **Errors during `npm install`**: check `node -v` again (step 1), then delete
+  the `node_modules` folder and run `npm install` again.
+- **A blank map**: the 3D view needs WebGL. Try another browser, or turn on
+  hardware acceleration in your browser's settings.
 
-Next.js 16 (App Router), React 19, TypeScript, Tailwind v4, Radix UI, three.js.
+## Share it online
 
-## Deploy
+It deploys with no settings:
 
-It deploys as-is to any Next.js host with no environment variables: import the
-repo on Vercel, or use `railway.json` on Railway. Hosted mock data is shared by
-every visitor and resets on each restart.
+1. Go to [vercel.com/new](https://vercel.com/new), import this repository and
+   click **Deploy**.
+2. In the project's **Settings → Git**, set **Production Branch** to
+   `prototype/mock-ui`, then redeploy. (The default `main` branch needs the
+   real backend.)
 
-## Scripts
+Everyone who opens the link shares the same demo data, and it resets whenever
+the host restarts the app.
+
+## Use real data instead
+
+Copy `.env.example` to `.env.local` and set `API_URL` to a running
+inventory-api, then restart `npm run dev`. With `API_URL` unset the app always
+uses the demo data. Set `MOCK_API=1` or `MOCK_API=0` to force one or the other.
+
+## For developers
+
+Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS v4, Radix UI and three.js.
 
 ```bash
 npm run dev     # development server
 npm run build   # production build
 npm start       # serve the production build
-npm test        # unit tests (vitest)
-npm run lint
+npm test        # unit tests
+npm run lint    # lint
 ```
+
+The demo backend lives in `src/lib/api/mock/`: `index.ts` answers each request,
+and `fixtures.json` holds the recorded demo responses.
