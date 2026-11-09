@@ -30,7 +30,7 @@
     <div class="chapter-meter" aria-hidden="true">
       <span class="chapter-no" id="chapterNo">01</span>
       <span class="chapter-bar"><i id="chapterFill"></i></span>
-      <span class="chapter-name" id="chapterName">Campus</span>
+      <span class="chapter-name" id="chapterName">Building</span>
     </div>
     <button class="search-trigger" id="searchOpen" type="button">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>
@@ -43,7 +43,7 @@
   </header>
 
   <nav class="chapters" aria-label="Sections" data-reveal>
-    <button data-ch="campus" aria-current="page"><b>01</b><span>Campus</span></button>
+    <button data-ch="campus" aria-current="page"><b>01</b><span>Floor</span></button>
     <button data-ch="find"><b>02</b><span>Find</span></button>
     <button data-ch="ledger"><b>03</b><span>Ledger</span></button>
     <button data-ch="pay"><b>04</b><span>Expenses</span></button>
@@ -55,7 +55,7 @@
     <div class="panel-body" id="panelBody"></div>
   </aside>
 
-  <div class="hint" id="hint" data-reveal>Drag to orbit · scroll to zoom · click a building</div>
+  <div class="hint" id="hint" data-reveal>Drag to orbit · scroll to zoom · click a zone</div>
   <div class="bldg-tags" id="bldgTags" aria-hidden="true"></div>
   <div class="title-card" id="titleCard" aria-hidden="true"></div>
   <div class="pin" id="pin" hidden><span id="pinText"></span></div>
@@ -72,9 +72,9 @@
   <!-- entry: pick who you are, the room re-cuts itself to that role -->
   <section class="intro" id="intro" aria-labelledby="introTitle">
     <div class="intro-inner">
-      <p class="eyebrow">Verlet Robotics · inventory platform · campus mockup</p>
+      <p class="eyebrow">Verlet Robotics · inventory platform · floor mockup</p>
       <h1 id="introTitle"><span class="h1-line">Every department.</span><em class="h1-line">Every shelf.</em></h1>
-      <p class="lede">The whole site at real scale — software, hardware, robotics, the stockroom. Open a building to step inside, find any part and walk the route to it, and arrange your own department.</p>
+      <p class="lede">Verlet's floor at real scale, built from a walk-through video — dev rows, robotics, electronics and printing, the stockroom shelving. Go up, find any part and walk the route to it, and arrange your own zone.</p>
       <p class="pick-label" id="pickLabel">Sign in as</p>
       <div class="roles" id="roles" role="group" aria-labelledby="pickLabel"></div>
     </div>

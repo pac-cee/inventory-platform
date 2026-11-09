@@ -1,34 +1,41 @@
-// The campus: every building from site.js, the stockroom racks inside the
-// warehouse, each department's furniture, and the people at their desks.
+// Verlet's floor in its building: the open hall from the walk-through video
+// (columns, yellow walls, glazing, frosted partitions, pine shelving), the
+// department zones on it, furniture and people, inside a block whose other
+// storeys lift away when you go in.
 //
-// Budget (Intel UHD laptop): one shadow-casting sun refitted to whatever is in
-// view, instancing for every repeated thing (~50 draw calls for the whole
-// site), pixel ratio capped, and frames drawn only when something moves.
+// Budget (Intel UHD laptop): one shadow-casting sun refitted to the view,
+// instancing for every repeated thing, pixel ratio capped, frames only when
+// something moves, low-power profile on software GL.
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import * as T from "./textures.js";
 import { kitGeometry, avatarGeometry, shirtGeometry, KINDS } from "./kit.js";
 import { RACKS, BAYS, LEVELS, SIDES, KIT } from "./data.js";
-import { SITE, BUILDINGS, PATHS, TREES, PARKING } from "./site.js";
+import { TOWER, BELOW, ABOVE, GROUND_Y, CEILING, AREA, GRID, COLUMN, DOOR, LIFTS, WALKWAY_Z, ROOMS, SHELVING, TREES } from "./site.js";
 
-const BAY_W = 2.4, DEPTH = 1.0, LEVEL_Y = [0.14, 1.06, 1.98, 2.9], RACK_H = 3.75;
-const X0 = -3.2;
-const RACK_Z = { A: -5.6, B: -2.3, C: 1.0 };
-const WALL_T = 0.25, CUT_H = 0.85;
-export const LAYOUT = {
-  W: 24, D: 16, px: 64, walkZ: 4.7,
-  entrance: { x: -10.2, z: 6.9 },
-  pallets: [[8.0, -3.0], [9.6, -3.0]],
-  racks: RACKS.map((r) => ({ name: r, z: RACK_Z[r], x0: X0, x1: X0 + BAY_W * BAYS })),
-};
+const FH = TOWER.floorHeight, PL = TOWER.plate;
+const PW = PL.x1 - PL.x0, PD = PL.z1 - PL.z0, PCX = (PL.x0 + PL.x1) / 2, PCZ = (PL.z0 + PL.z1) / 2;
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const damp = (a, b, lambda, dt) => a + (b - a) * (1 - Math.exp(-lambda * dt));
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
-const easeOutBack = (t) => { const c1 = 1.5, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); };
 const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 function easeOutBounce(x) { const n1 = 7.5625, d1 = 2.75; if (x < 1 / d1) return n1 * x * x; if (x < 2 / d1) return n1 * (x -= 1.5 / d1) * x + 0.75; if (x < 2.5 / d1) return n1 * (x -= 2.25 / d1) * x + 0.9375; return n1 * (x -= 2.625 / d1) * x + 0.984375; }
 function hash(i) { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+
+// columns on the grid inside Verlet's area (also obstacles for the layout editor)
+export const COLUMNS = [];
+for (let x = AREA.x0 + GRID; x < AREA.x1 - 0.1; x += GRID) for (let z = AREA.z0 + GRID; z < AREA.z1 - 0.1; z += GRID) COLUMNS.push([x, z]);
+
+// stockroom shelving: each rack is a run of bays along a wall; front faces into the room
+const SH = SHELVING;
+const RACK = Object.fromEntries(SH.racks.map((r) => {
+  const along = r.dir === "east" ? [1, 0] : [0, 1];
+  const front = r.dir === "east" ? [0, 1] : [1, 0];
+  return [r.name, { ...r, along, front, len: SH.bayW * BAYS }];
+}));
+const rackPoint = (r, u, v) => [r.x + r.along[0] * u + r.front[0] * v, r.z + r.along[1] * u + r.front[1] * v];
+const rackRot = (r) => (r.dir === "east" ? 0 : Math.PI / 2);
 
 // world-space UVs so one texture reads at true scale on any scaled instance
 function worldUV(mat, mode, tile) {
@@ -37,14 +44,18 @@ function worldUV(mat, mode, tile) {
     sh.vertexShader = sh.vertexShader
       .replace("#include <common>", "#include <common>\nuniform float uTile;")
       .replace("#include <uv_vertex>", `#include <uv_vertex>
+      #ifdef USE_INSTANCING
+        vec4 wuv = modelMatrix * instanceMatrix * vec4(position, 1.0);
+      #else
+        vec4 wuv = modelMatrix * vec4(position, 1.0);
+      #endif
+      vec3 wn = normalize(mat3(modelMatrix) * normal);
+      vec2 tuv = ${mode === "wall" ? "(abs(wn.x) > 0.5 ? vec2(wuv.z, wuv.y) : abs(wn.y) > 0.5 ? wuv.xz : vec2(wuv.x, wuv.y)) * uTile" : "wuv.xz * uTile"};
       #ifdef USE_MAP
-        #ifdef USE_INSTANCING
-          vec4 wuv = modelMatrix * instanceMatrix * vec4(position, 1.0);
-        #else
-          vec4 wuv = modelMatrix * vec4(position, 1.0);
-        #endif
-        vec3 wn = normalize(mat3(modelMatrix) * normal);
-        ${mode === "wall" ? "vMapUv = (abs(wn.x) > 0.5 ? vec2(wuv.z, wuv.y) : abs(wn.y) > 0.5 ? wuv.xz : vec2(wuv.x, wuv.y)) * uTile;" : "vMapUv = wuv.xz * uTile;"}
+        vMapUv = tuv;
+      #endif
+      #ifdef USE_ROUGHNESSMAP
+        vRoughnessMapUv = tuv;
       #endif`);
   };
   mat.customProgramCacheKey = () => `wuv-${mode}-${tile}`;
@@ -53,141 +64,92 @@ function worldUV(mat, mode, tile) {
 
 export function createScene(canvas, hooks) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
-  // software GL (SwiftShader, llvmpipe) turns every frame into a long CPU task
   const gl = renderer.getContext();
   const dbg = gl.getExtension("WEBGL_debug_renderer_info");
   const gpuName = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : "";
   const lowPower = /swiftshader|llvmpipe|softpipe|software|basic render/i.test(gpuName);
   renderer.setPixelRatio(Math.min(devicePixelRatio, lowPower ? 1 : 1.5));
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.95;
+  renderer.toneMappingExposure = 1.0;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(new THREE.Color("#a48f80"), 130, 460);
+  scene.fog = new THREE.Fog(new THREE.Color("#a99a8c"), 140, 480);
   const pmrem = new THREE.PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  scene.environmentIntensity = 0.35;
+  scene.environmentIntensity = 0.45;
 
   const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 900);
-  camera.position.set(30, 70, 80);
+  camera.position.set(60, 30, 80);
   const controls = new OrbitControls(camera, canvas);
-  Object.assign(controls, { enableDamping: true, dampingFactor: 0.075, minDistance: 2.2, maxDistance: 140, maxPolarAngle: Math.PI * 0.47, zoomSpeed: 0.8, rotateSpeed: 0.55 });
-  controls.target.set(-2, 0, -6);
-  const G = SITE.ground;
+  Object.assign(controls, { enableDamping: true, dampingFactor: 0.075, minDistance: 2.2, maxDistance: 150, maxPolarAngle: Math.PI * 0.49, zoomSpeed: 0.8, rotateSpeed: 0.55 });
+  controls.target.set(PCX, GROUND_Y + 8, PCZ);
   controls.addEventListener("change", () => {
     const t = controls.target;
-    t.x = THREE.MathUtils.clamp(t.x, G.x0, G.x1); t.z = THREE.MathUtils.clamp(t.z, G.z0, G.z1); t.y = THREE.MathUtils.clamp(t.y, -2, 4);
+    t.x = THREE.MathUtils.clamp(t.x, PL.x0 - 30, PL.x1 + 30); t.z = THREE.MathUtils.clamp(t.z, PL.z0 - 30, PL.z1 + 40); t.y = THREE.MathUtils.clamp(t.y, GROUND_Y - 2, 8);
   });
 
-  // ---- sky: gradient dome with a sun glow, not affected by fog --------------
+  // ---- sky dome with a sun glow, fog-free --------------------------------------
   const sunDir = new THREE.Vector3();
-  { const az = THREE.MathUtils.degToRad(40), el = THREE.MathUtils.degToRad(32); sunDir.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).normalize(); }
+  { const az = THREE.MathUtils.degToRad(35), el = THREE.MathUtils.degToRad(38); sunDir.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).normalize(); }
   const sky = new THREE.Mesh(new THREE.SphereGeometry(500, 32, 16), new THREE.ShaderMaterial({
     side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: { uSun: { value: sunDir }, uTop: { value: new THREE.Color("#2a3a55") }, uHorizon: { value: new THREE.Color("#c9a68a") }, uGround: { value: new THREE.Color("#a48f80") } },
+    uniforms: { uSun: { value: sunDir }, uTop: { value: new THREE.Color("#4a6687") }, uHorizon: { value: new THREE.Color("#d9c8b4") }, uGround: { value: new THREE.Color("#a99a8c") } },
     vertexShader: "varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
     fragmentShader: `varying vec3 vDir; uniform vec3 uSun, uTop, uHorizon, uGround;
-      void main(){ float h = vDir.y; vec3 c = h > 0.0 ? mix(uHorizon, uTop, pow(h, 0.55)) : mix(uHorizon, uGround, pow(-h, 0.4));
-        float s = max(dot(normalize(vDir), uSun), 0.0); c += vec3(1.0, 0.75, 0.5) * (pow(s, 64.0) * 1.2 + pow(s, 6.0) * 0.18);
+      void main(){ float h = vDir.y; vec3 c = h > 0.0 ? mix(uHorizon, uTop, pow(h, 0.5)) : mix(uHorizon, uGround, pow(-h, 0.4));
+        float s = max(dot(normalize(vDir), uSun), 0.0); c += vec3(1.0, 0.85, 0.65) * (pow(s, 80.0) * 1.0 + pow(s, 6.0) * 0.12);
         gl_FragColor = vec4(c, 1.0); }`,
   }));
   sky.renderOrder = -1;
   scene.add(sky);
 
-  // ---- lights: one low warm sun, refitted to the area in view ---------------
-  const hemi = new THREE.HemisphereLight("#bccbe0", "#5b4a3a", 0.55);
-  const sun = new THREE.DirectionalLight("#ffd2a1", 3.0);
+  // ---- lights -----------------------------------------------------------------
+  const hemi = new THREE.HemisphereLight("#dfe6ef", "#7a6a58", 0.75);
+  const sun = new THREE.DirectionalLight("#fff0dc", 2.6);
   sun.castShadow = true;
   sun.shadow.mapSize.setScalar(lowPower ? 1024 : 2048);
   sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03; sun.shadow.radius = 3;
   scene.add(hemi, sun, sun.target);
   let needsRender = true;
-  function fitShadow(cx, cz, radius) {
-    sun.target.position.set(cx, 0, cz);
-    sun.position.copy(sun.target.position).addScaledVector(sunDir, radius * 3 + 40);
+  function fitShadow(cx, cy, cz, radius) {
+    sun.target.position.set(cx, cy, cz);
+    sun.position.copy(sun.target.position).addScaledVector(sunDir, radius * 3 + 50);
     const sc = sun.shadow.camera;
-    sc.left = -radius; sc.right = radius; sc.top = radius; sc.bottom = -radius; sc.near = 1; sc.far = radius * 6 + 90;
+    sc.left = -radius; sc.right = radius; sc.top = radius; sc.bottom = -radius; sc.near = 1; sc.far = radius * 6 + 120;
     sc.updateProjectionMatrix();
     needsRender = true;
   }
-  fitShadow(-2, -6, 58);
 
-  // ---- materials -------------------------------------------------------------
-  const conc = T.concrete();
-  conc.map.repeat.set(6, 4); conc.roughnessMap.repeat.set(6, 4);
-  const floorMat = new THREE.MeshStandardMaterial({ map: conc.map, roughnessMap: conc.roughnessMap, roughness: 0.82 });
-  const slabTex = conc.map.clone(); slabTex.repeat.set(1, 1); slabTex.needsUpdate = true;
-  const slabMat = worldUV(new THREE.MeshStandardMaterial({ map: slabTex, roughness: 0.8 }), "floor", 0.25);
-  const grassMat = worldUV(new THREE.MeshStandardMaterial({ map: T.grass(), roughness: 0.95 }), "floor", 0.09);
-  const uprightMat = new THREE.MeshStandardMaterial({ map: T.upright(), roughness: 0.45, metalness: 0.35 });
-  const beamMat = new THREE.MeshStandardMaterial({ color: "#e0621d", roughness: 0.42, metalness: 0.3 });
-  const deckMat = new THREE.MeshStandardMaterial({ map: T.wireDeck(), alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.35, metalness: 0.9 });
-  const cardMat = new THREE.MeshStandardMaterial({ map: T.cardboard(), roughness: 0.92 });
-  const toteMat = new THREE.MeshStandardMaterial({ color: "#2a6db5", roughness: 0.55, side: THREE.DoubleSide });
-  const wallTex = { cladding: T.cladding(), render: T.render(), brick: T.brick(), concrete: slabTex.clone() };
-  for (const t of Object.values(wallTex)) { t.repeat.set(1, 1); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.needsUpdate = true; }
-  const WALL_MATS = {
-    cladding: worldUV(new THREE.MeshStandardMaterial({ map: wallTex.cladding, roughness: 0.55, metalness: 0.45 }), "wall", 0.4),
-    render: worldUV(new THREE.MeshStandardMaterial({ map: wallTex.render, roughness: 0.9 }), "wall", 0.25),
-    brick: worldUV(new THREE.MeshStandardMaterial({ map: wallTex.brick, roughness: 0.85 }), "wall", 0.45),
-    concrete: worldUV(new THREE.MeshStandardMaterial({ map: wallTex.concrete, roughness: 0.85 }), "wall", 0.18),
-  };
-  const glassMat = new THREE.MeshStandardMaterial({ color: "#3b5268", metalness: 0.7, roughness: 0.06, envMapIntensity: 1.8, emissive: "#a9bccc", emissiveIntensity: 0.32 });
-  const roofMat = new THREE.MeshStandardMaterial({ color: "#4d4f53", roughness: 0.85, metalness: 0.1 });
-  const metalMat = new THREE.MeshStandardMaterial({ color: "#b9bdc2", roughness: 0.45, metalness: 0.6 });
-  const accentMat = new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.5, metalness: 0.2 });
-  const kitMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0.05 });
+  // ---- materials ------------------------------------------------------------------
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), sv = new THREE.Vector3(1, 1, 1), e3 = new THREE.Euler();
   const compose = (x, y, z, sx = 1, sy = 1, sz = 1, ry = 0) => { q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, ry); return new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(sx, sy, sz)); };
   const place = (mesh, i, x, y, z, sx = 1, sy = 1, sz = 1, ry = 0) => mesh.setMatrixAt(i, compose(x, y, z, sx, sy, sz, ry));
   const shade = (o, cast = true) => { o.castShadow = cast; o.receiveShadow = true; return o; };
   const unit = new THREE.BoxGeometry(1, 1, 1);
+  const tile = T.tiles();
+  const tileMat = worldUV(new THREE.MeshStandardMaterial({ map: tile.map, roughnessMap: tile.roughnessMap, roughness: 1, metalness: 0, envMapIntensity: 1.3 }), "floor", 1 / 0.6);
+  const greyFloorMat = worldUV(new THREE.MeshStandardMaterial({ map: tile.map, roughness: 0.5, color: "#9d9a95" }), "floor", 1 / 0.6);
+  const grassMat = worldUV(new THREE.MeshStandardMaterial({ map: T.grass(), roughness: 0.95 }), "floor", 0.09);
+  const curtainMat = worldUV(new THREE.MeshStandardMaterial({ map: T.curtainWall(), metalness: 0.55, roughness: 0.12, envMapIntensity: 1.6 }), "wall", 1 / 1.5);
+  const slabEdgeMat = new THREE.MeshStandardMaterial({ color: "#d9d6cf", roughness: 0.8 });
+  const yellowMat = new THREE.MeshStandardMaterial({ color: "#e9c62b", roughness: 0.85 });
+  const greenMat = new THREE.MeshStandardMaterial({ color: "#a9b98a", roughness: 0.85 });
+  const columnMat = new THREE.MeshStandardMaterial({ color: "#8fb0bd", roughness: 0.8 });
+  const ceilingMat = new THREE.MeshStandardMaterial({ color: "#f2f2ef", roughness: 0.9, side: THREE.DoubleSide });
+  const ledMat = new THREE.MeshBasicMaterial({ color: "#ffffff" });
+  const alumMat = new THREE.MeshStandardMaterial({ color: "#d4d8dc", roughness: 0.35, metalness: 0.7 });
+  const clearGlass = new THREE.MeshStandardMaterial({ color: "#a9c4d4", transparent: true, opacity: 0.28, metalness: 0.2, roughness: 0.05, envMapIntensity: 1.6, depthWrite: false });
+  const frostMat = new THREE.MeshStandardMaterial({ map: T.frosted(), transparent: true, roughness: 0.5, depthWrite: false });
+  const louvreMat = new THREE.MeshStandardMaterial({ color: "#e9ebec", roughness: 0.6 });
+  const concreteMat = new THREE.MeshStandardMaterial({ color: "#c7c2ba", roughness: 0.9 });
+  const pineMat = new THREE.MeshStandardMaterial({ color: "#d9b07a", roughness: 0.7 });
+  const pineDark = new THREE.MeshStandardMaterial({ color: "#c69a62", roughness: 0.75 });
+  const cardMat = new THREE.MeshStandardMaterial({ map: T.cardboard(), roughness: 0.92 });
+  const trayMat = new THREE.MeshStandardMaterial({ color: "#f1f1ee", roughness: 0.5, side: THREE.DoubleSide });
+  const kitMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0.05 });
 
-  // ---- ground: grass + the painted site plan ----------------------------------
-  const GW = G.x1 - G.x0, GD = G.z1 - G.z0, gcx = (G.x0 + G.x1) / 2, gcz = (G.z0 + G.z1) / 2;
-  const ground = shade(new THREE.Mesh(new THREE.PlaneGeometry(1400, 1400), grassMat), false);
-  ground.rotation.x = -Math.PI / 2; ground.position.set(gcx, -0.02, gcz);
-  const sitePlan = shade(new THREE.Mesh(new THREE.PlaneGeometry(GW, GD), new THREE.MeshStandardMaterial({ map: T.siteDecals(SITE, PATHS, PARKING), transparent: true, roughness: 0.9, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 })), false);
-  sitePlan.rotation.x = -Math.PI / 2; sitePlan.position.set(gcx, -0.005, gcz);
-  scene.add(ground, sitePlan);
-
-  // ---- buildings from site.js --------------------------------------------------
-  const B = BUILDINGS.map((b, i) => ({ ...b, idx: i, H: b.floors.reduce((a, f) => a + f.h, 0), open: 0, vel: 0, target: 0, assemble: 1, assembleT: null }));
-  const byB = new Map(B.map((b) => [b.id, b]));
-  const wallParts = {};
-  const glassParts = [], doorParts = [], roofParts = [], accentParts = [], slabParts = [], hvacParts = [];
-  for (const b of B) {
-    const { x, z, w, d, H } = b, hw = w / 2, hd = d / 2;
-    const walls = (wallParts[b.walls] ||= []);
-    const wall = (cx, cz, len, along, cut, y0 = 0, h = H) => walls.push({ b, cut, m: compose(cx, y0 + h / 2, cz, along === "x" ? len : WALL_T, h, along === "x" ? WALL_T : len) });
-    const dx = x + (b.door?.at || 0), dw = b.door?.w || 2, dh = b.door?.h || 2.6;
-    const l0 = x - hw, l1 = dx - dw / 2, r0 = dx + dw / 2, r1 = x + hw;
-    wall((l0 + l1) / 2, z + hd, l1 - l0, "x", true);
-    wall((r0 + r1) / 2, z + hd, r1 - r0, "x", true);
-    wall(dx, z + hd, dw, "x", true, dh, H - dh);
-    wall(x, z - hd, w + WALL_T, "x", false);
-    wall(x - hw, z, d, "z", false);
-    wall(x + hw, z, d, "z", true);
-    if (b.door) (b.door.kind === "glass" ? glassParts : doorParts).push({ b, cut: true, m: compose(dx, dh / 2, z + hd, dw - 0.05, dh, WALL_T * 0.6) });
-    const win = b.windows?.strip || b.windows?.band;
-    if (win) for (const side of win.sides) {
-      const len = side === "front" || side === "back" ? w : d;
-      const n = Math.floor((len - 1.2) / win.every);
-      for (let k = 0; k < n; k++) {
-        const t = -((n - 1) * win.every) / 2 + k * win.every;
-        if (side === "front" && Math.abs(x + t - dx) < dw / 2 + win.w / 2 + 0.2) continue;
-        const pos = side === "front" ? [x + t, z + hd] : side === "back" ? [x + t, z - hd] : side === "east" ? [x + hw, z + t] : [x - hw, z + t];
-        const alongX = side === "front" || side === "back";
-        glassParts.push({ b, cut: side === "front" || side === "east", m: compose(pos[0], win.y + win.h / 2, pos[1], alongX ? win.w : WALL_T + 0.04, win.h, alongX ? WALL_T + 0.04 : win.w) });
-      }
-    }
-    roofParts.push({ b, m: compose(x, H + 0.15, z, w + WALL_T, 0.3, d + WALL_T) });
-    for (const [px, pz, pw, pd] of [[x, z + hd, w + 0.4, 0.2], [x, z - hd, w + 0.4, 0.2], [x - hw, z, 0.2, d], [x + hw, z, 0.2, d]]) accentParts.push({ b, m: compose(px, H + 0.45, pz, pw, 0.6, pd) });
-    hvacParts.push({ b, m: compose(x + w * 0.22, H + 0.75, z - d * 0.15, 2.2, 0.9, 1.4) }, { b, m: compose(x - w * 0.25, H + 0.55, z + d * 0.1, 1.2, 0.5, 1.2) });
-    slabParts.push({ b, m: b.id === "b-store" ? new THREE.Matrix4().makeScale(0, 0, 0) : compose(x, -0.04, z, w, 0.1, d) });
-  }
   function instanced(geo, mat, parts, cast = true) {
     const mesh = shade(new THREE.InstancedMesh(geo, mat, Math.max(1, parts.length)), cast);
     parts.forEach((p, i) => { p.mesh = mesh; p.i = i; mesh.setMatrixAt(i, p.m); });
@@ -195,78 +157,199 @@ export function createScene(canvas, hooks) {
     scene.add(mesh);
     return mesh;
   }
-  const wallMeshes = Object.entries(wallParts).map(([key, parts]) => {
-    const mesh = instanced(unit, WALL_MATS[key], parts);
-    mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(parts.length * 3), 3);
-    parts.forEach((p, i) => mesh.setColorAt(i, new THREE.Color(p.b.tint)));
-    mesh.userData.parts = parts;
-    return mesh;
+
+  // ---- street level ------------------------------------------------------------------
+  const ground = shade(new THREE.Mesh(new THREE.PlaneGeometry(1400, 1400), grassMat), false);
+  ground.rotation.x = -Math.PI / 2; ground.position.set(PCX, GROUND_Y - 0.02, PCZ);
+  const SB = { x0: PL.x0 - 40, x1: PL.x1 + 40, z0: PL.z0 - 20, z1: TOWER.street.z + 12 };
+  const street = shade(new THREE.Mesh(new THREE.PlaneGeometry(SB.x1 - SB.x0, SB.z1 - SB.z0), new THREE.MeshStandardMaterial({ map: T.streetDecals(SB, PL, TOWER.street), transparent: true, roughness: 0.9, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 })), false);
+  street.rotation.x = -Math.PI / 2; street.position.set((SB.x0 + SB.x1) / 2, GROUND_Y - 0.005, (SB.z0 + SB.z1) / 2);
+  scene.add(ground, street);
+  const trunk = shade(new THREE.InstancedMesh(new THREE.CylinderGeometry(0.14, 0.22, 2.6, 8), new THREE.MeshStandardMaterial({ color: "#5a4636", roughness: 0.9 }), TREES.length));
+  const crown = shade(new THREE.InstancedMesh(treeCrownGeometry(), kitMat, TREES.length));
+  TREES.forEach(([x, z], i) => { const s = 0.85 + hash(i + 3) * 0.5; place(trunk, i, x, GROUND_Y + 1.3 * s, z, s, s, s); place(crown, i, x, GROUND_Y + 2.2 * s, z, s, s, s, hash(i) * 6); });
+  const cars = shade(new THREE.InstancedMesh(carGeometry(), kitMat, 4));
+  [[-6, 1], [14, -1], [26, 1], [44, -1]].forEach(([x, side], i) => place(cars, i, x, GROUND_Y, TOWER.street.z + side * 2.2, 1, 1, 1, Math.PI / 2 + (side > 0 ? Math.PI : 0)));
+  cars.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(12), 3);
+  ["#d7d7d4", "#2c3e57", "#8a1c1c", "#1d1f22"].forEach((c, i) => cars.setColorAt(i, new THREE.Color(c)));
+  scene.add(trunk, crown, cars);
+
+  // ---- the block: storeys below and above Verlet's, as glass boxes with slab bands --
+  // each part remembers which storey it belongs to (k < 0 below, k > 0 above, 0 = Verlet)
+  const storeyParts = [], bandParts = [], roofParts = [];
+  for (let k = -BELOW; k <= ABOVE; k++) {
+    const y0 = k * FH;
+    bandParts.push({ k, m: compose(PCX, y0 - 0.2, PCZ, PW + 0.4, 0.4, PD + 0.4) });
+    if (k !== 0) storeyParts.push({ k, m: compose(PCX, y0 + FH / 2, PCZ, PW, FH - 0.4, PD) });
+  }
+  const topY = (ABOVE + 1) * FH;
+  roofParts.push({ k: ABOVE + 1, m: compose(PCX, topY - 0.2, PCZ, PW + 0.4, 0.4, PD + 0.4) });
+  for (const [x, z, w, d] of [[PCX, PL.z1, PW + 0.4, 0.25], [PCX, PL.z0, PW + 0.4, 0.25], [PL.x0, PCZ, 0.25, PD], [PL.x1, PCZ, 0.25, PD]]) roofParts.push({ k: ABOVE + 1, m: compose(x, topY + 0.4, z, w, 0.8, d) });
+  roofParts.push({ k: ABOVE + 1, m: compose(PCX + 10, topY + 1.1, PCZ - 3, 6, 1.6, 4) }, { k: ABOVE + 1, m: compose(PCX - 12, topY + 0.8, PCZ + 2, 3, 1.0, 3) });
+  const storeyMesh = instanced(unit, curtainMat, storeyParts);
+  const bandMesh = instanced(unit, slabEdgeMat, bandParts);
+  const roofMesh = instanced(unit, concreteMat, roofParts);
+  // ground-floor entrance canopy
+  const canopy = shade(new THREE.Mesh(unit, alumMat)); canopy.scale.set(10, 0.3, 3.5); canopy.position.set(LIFTS.x, GROUND_Y + 3.4, PL.z1 + 1.7); scene.add(canopy);
+
+  // ---- Verlet's storey: the facade round the whole plate (it drops to sill height inside)
+  const facadeParts = [];
+  const bay = 3;
+  for (const side of ["north", "south", "west", "east"]) {
+    const alongX = side === "north" || side === "south";
+    const len = alongX ? PW : PD, n = Math.round(len / bay);
+    for (let i = 0; i < n; i++) {
+      const t = (alongX ? PL.x0 : PL.z0) + (i + 0.5) * (len / n);
+      const x = alongX ? t : side === "west" ? PL.x0 : PL.x1, z = alongX ? (side === "north" ? PL.z0 : PL.z1) : t;
+      facadeParts.push({ side, m: compose(x, FH / 2 - 0.2, z, alongX ? len / n - 0.02 : 0.12, FH - 0.4, alongX ? 0.12 : len / n - 0.02) });
+    }
+  }
+  const facadeMesh = instanced(unit, curtainMat, facadeParts, false);
+  // Verlet's slice of the facade gets a band in the brand pink, so you can spot the floor
+  const verletBand = new THREE.Mesh(unit, new THREE.MeshStandardMaterial({ color: "#ff5c95", emissive: "#ff5c95", emissiveIntensity: 0.35, roughness: 0.5 }));
+  verletBand.scale.set(AREA.x1 - AREA.x0 + 0.4, 0.22, 0.3); verletBand.position.set((AREA.x0 + AREA.x1) / 2, -0.06, PL.z1 + 0.05);
+  scene.add(verletBand);
+
+  // ---- floor finishes: Verlet's tiles, the rest of the floor grey ----------------
+  const vFloor = shade(new THREE.Mesh(new THREE.PlaneGeometry(AREA.x1 - AREA.x0, AREA.z1 - AREA.z0), tileMat), false);
+  vFloor.rotation.x = -Math.PI / 2; vFloor.position.set((AREA.x0 + AREA.x1) / 2, 0.002, (AREA.z0 + AREA.z1) / 2);
+  const oFloor = shade(new THREE.Mesh(new THREE.PlaneGeometry(PL.x1 - AREA.x1, PD), greyFloorMat), false);
+  oFloor.rotation.x = -Math.PI / 2; oFloor.position.set((AREA.x1 + PL.x1) / 2, 0.001, PCZ);
+  const plateEdge = shade(new THREE.Mesh(new THREE.PlaneGeometry(PW, PD), greyFloorMat), false);
+  plateEdge.rotation.x = -Math.PI / 2; plateEdge.position.set(PCX, -0.001, PCZ);
+  scene.add(vFloor, oFloor, plateEdge);
+
+  // ---- Verlet's hall: yellow walls (N, W) with a green bulkhead, columns, partition ----
+  const wallParts = [], bulkParts = [];
+  const WT = 0.2;
+  wallParts.push({ m: compose((AREA.x0 + AREA.x1) / 2, CEILING / 2, AREA.z0 + WT / 2, AREA.x1 - AREA.x0, CEILING, WT) });
+  wallParts.push({ m: compose(AREA.x0 + WT / 2, CEILING / 2, (AREA.z0 + AREA.z1) / 2, WT, CEILING, AREA.z1 - AREA.z0) });
+  bulkParts.push({ m: compose((AREA.x0 + AREA.x1) / 2, CEILING - 0.25, AREA.z0 + WT + 0.01, AREA.x1 - AREA.x0, 0.5, 0.02) });
+  bulkParts.push({ m: compose(AREA.x0 + WT + 0.01, CEILING - 0.25, (AREA.z0 + AREA.z1) / 2, 0.02, 0.5, AREA.z1 - AREA.z0) });
+  const wallMesh = instanced(unit, yellowMat, wallParts);
+  const bulkMesh = instanced(unit, greenMat, bulkParts, false);
+  const colMesh = instanced(unit, columnMat, COLUMNS.map(([x, z]) => ({ m: compose(x, CEILING / 2, z, COLUMN, CEILING, COLUMN) })));
+  // south: the glazing sits in the facade; add the louvred top band and a sill on the inside
+  const louvreParts = [], sillParts = [];
+  for (let x = AREA.x0 + 0.75; x < AREA.x1; x += 1.5) {
+    for (let k = 0; k < 6; k++) louvreParts.push({ m: compose(x, CEILING - 0.08 - k * 0.07, AREA.z1 - 0.12, 1.42, 0.03, 0.06) });
+  }
+  sillParts.push({ m: compose((AREA.x0 + AREA.x1) / 2, 0.05, AREA.z1 - 0.15, AREA.x1 - AREA.x0, 0.1, 0.12) });
+  const louvreMesh = instanced(unit, louvreMat, louvreParts, false);
+  const sillMesh = instanced(unit, alumMat, sillParts, false);
+  // east: frosted partition panels with aluminium mullions, double door at DOOR
+  const partParts = [], mullParts = [];
+  for (let z = AREA.z0 + 0.6; z < AREA.z1; z += 1.2) {
+    if (Math.abs(z - DOOR.z) < DOOR.w / 2 + 0.05) continue;
+    partParts.push({ m: compose(AREA.x1, CEILING / 2, z, 0.03, CEILING, 1.18) });
+  }
+  for (let z = AREA.z0; z <= AREA.z1 + 0.01; z += 1.2) mullParts.push({ m: compose(AREA.x1, CEILING / 2, z, 0.06, CEILING, 0.05) });
+  mullParts.push({ m: compose(AREA.x1, CEILING - 0.02, (AREA.z0 + AREA.z1) / 2, 0.08, 0.05, AREA.z1 - AREA.z0) });
+  const partMesh = instanced(new THREE.BoxGeometry(1, 1, 1), frostMat, partParts, false);
+  const mullMesh = instanced(unit, alumMat, mullParts, false);
+  const doorLeaves = instanced(unit, clearGlass, [{ m: compose(AREA.x1, 1.1, DOOR.z - DOOR.w / 4, 0.04, 2.2, DOOR.w / 2 - 0.04) }, { m: compose(AREA.x1, 1.1, DOOR.z + DOOR.w / 4, 0.04, 2.2, DOOR.w / 2 - 0.04) }], false);
+  // the rest of the floor: lift core, a frosted office row, a sign
+  const core = shade(new THREE.Mesh(unit, concreteMat)); core.scale.set(6, CEILING, 5); core.position.set(LIFTS.x + 1, CEILING / 2, LIFTS.z - 4.2); scene.add(core);
+  const liftDoors = instanced(unit, alumMat, [{ m: compose(LIFTS.x - 0.6, 1.1, LIFTS.z - 1.68, 1.0, 2.2, 0.05) }, { m: compose(LIFTS.x + 2.0, 1.1, LIFTS.z - 1.68, 1.0, 2.2, 0.05) }], false);
+  const otherParts = [];
+  for (let x = AREA.x1 + 3; x < PL.x1 - 1; x += 1.2) otherParts.push({ m: compose(x, CEILING / 2, 6, 1.18, CEILING, 0.03) });
+  const otherMesh = instanced(new THREE.BoxGeometry(1, 1, 1), frostMat, otherParts, false);
+
+  // ---- ceiling group: white ceiling, flat LED panels, green beams on the column lines
+  // (it goes with the storey above when the floors lift)
+  const ceilParts = [{ m: compose(PCX, CEILING + 0.01, PCZ, PW, 0.02, PD) }];
+  const beamParts = [];
+  for (let x = AREA.x0 + GRID; x < AREA.x1; x += GRID) beamParts.push({ m: compose(x, CEILING - 0.18, (AREA.z0 + AREA.z1) / 2, 0.45, 0.36, AREA.z1 - AREA.z0) });
+  for (let z = AREA.z0 + GRID; z < AREA.z1; z += GRID) beamParts.push({ m: compose((AREA.x0 + AREA.x1) / 2, CEILING - 0.18, z, AREA.x1 - AREA.x0, 0.36, 0.45) });
+  const ledParts = [];
+  for (let x = AREA.x0 + 3; x < AREA.x1; x += GRID) for (let z = AREA.z0 + 3; z < AREA.z1; z += GRID) ledParts.push({ m: compose(x, CEILING - 0.005, z, 1.2, 0.01, 0.3) });
+  const ceilMesh = instanced(unit, ceilingMat, ceilParts, false);
+  const beamMesh = instanced(unit, greenMat, beamParts, false);
+  const ledMesh = instanced(unit, ledMat, ledParts, false);
+  const ceilingGroup = [[ceilMesh, ceilParts], [beamMesh, beamParts], [ledMesh, ledParts]];
+
+  // ---- zones: a soft tint and a drawn border per department -----------------------
+  const B = ROOMS.map((r, i) => ({ ...r, idx: i, open: 0, H: CEILING }));
+  const byB = new Map(B.map((b) => [b.id, b]));
+  const zoneMat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false,
+    uniforms: { uT: { value: 0 } },
+    vertexShader: `attribute vec3 aColor; attribute vec3 aSize; varying vec2 vP; varying vec3 vC; varying vec3 vS;
+      void main(){ vP = position.xy; vC = aColor; vS = aSize; gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `varying vec2 vP; varying vec3 vC; varying vec3 vS; uniform float uT;
+      void main(){ vec2 d = (0.5 - abs(vP)) * vS.xy; float e = min(d.x, d.y);
+        float line = smoothstep(0.16, 0.05, e) * smoothstep(-0.02, 0.02, e);
+        float dash = step(0.5, fract((vP.x * vS.x + vP.y * vS.y) * 0.8));
+        float glow = vS.z;
+        float a = (line * (0.5 + 0.35 * glow) * (0.65 + 0.35 * dash) + 0.018 + 0.05 * glow) * uT;
+        gl_FragColor = vec4(vC, a); }`,
   });
-  const glassMesh = instanced(unit, glassMat, glassParts, false);
-  const doorMesh = instanced(unit, metalMat, doorParts);
-  const roofMesh = instanced(unit, roofMat, roofParts);
-  const hvacMesh = instanced(unit, metalMat, hvacParts);
-  const accentMesh = instanced(unit, accentMat, accentParts);
-  accentMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(accentParts.length * 3).fill(1), 3);
-  const slabMesh = instanced(unit, slabMat, slabParts, false);
-  slabMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(slabParts.length * 3).fill(1), 3);
-  const FLOOR_TINT = { cladding: "#d6d2cc", render: "#cfc4b4", brick: "#c9cbcf", concrete: "#bdb8b0" };
-  // the shared concrete texture is dark; floors lift it (>1 is fine in linear space)
-  slabParts.forEach((p, i) => slabMesh.setColorAt(i, new THREE.Color(p.b.id === "b-robotics" ? "#c9ccd0" : FLOOR_TINT[p.b.walls] || "#cccccc").multiplyScalar(p.b.id === "b-robotics" ? 1.5 : 1.7)));
-  const allParts = [...Object.values(wallParts).flat(), ...roofParts, ...accentParts, ...glassParts, ...doorParts, ...slabParts];
+  const zoneGeo = new THREE.PlaneGeometry(1, 1);
+  const zoneColor = new THREE.InstancedBufferAttribute(new Float32Array(B.length * 3), 3);
+  const zoneSize = new THREE.InstancedBufferAttribute(new Float32Array(B.length * 3), 3);
+  zoneGeo.setAttribute("aColor", zoneColor); zoneGeo.setAttribute("aSize", zoneSize);
+  const zoneMesh = new THREE.InstancedMesh(zoneGeo, zoneMat, B.length);
+  B.forEach((b, i) => { q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2); zoneMesh.setMatrixAt(i, m4.compose(v.set(b.x, 0.012, b.z), q, sv.set(b.w, b.d, 1))); zoneSize.setXYZ(i, b.w, b.d, 0); b.zi = i; });
+  zoneMesh.renderOrder = 1;
+  scene.add(zoneMesh);
+  // light curtains: when you open a zone its border rises as a glowing wall, then settles
+  const curtainMatZ = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+    uniforms: { uColor: { value: new THREE.Color("#ff5c95") }, uRise: { value: 0 } },
+    vertexShader: "varying float vY; void main(){ vY = position.y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }",
+    fragmentShader: "varying float vY; uniform vec3 uColor; uniform float uRise; void main(){ float h = uRise * 2.6; if (vY > h) discard; float a = (1.0 - vY / max(h, 0.001)) * 0.55 * min(1.0, uRise * 3.0); gl_FragColor = vec4(uColor * a, a); }",
+  });
+  const zoneCurtain = new THREE.Mesh(new THREE.BufferGeometry(), curtainMatZ);
+  zoneCurtain.visible = false; zoneCurtain.renderOrder = 3; scene.add(zoneCurtain);
+  let curtain = null;
+  function raiseCurtain(b, color) {
+    const x0 = b.x - b.w / 2, x1 = b.x + b.w / 2, z0 = b.z - b.d / 2, z1 = b.z + b.d / 2, H = 2.6;
+    const P = [[x0, z0], [x1, z0], [x1, z1], [x0, z1], [x0, z0]], pos = [];
+    for (let i = 0; i < 4; i++) { const [ax, az] = P[i], [bx, bz] = P[i + 1]; pos.push(ax, 0, az, bx, 0, bz, bx, H, bz, ax, 0, az, bx, H, bz, ax, H, az); }
+    zoneCurtain.geometry.dispose();
+    zoneCurtain.geometry = new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    curtainMatZ.uniforms.uColor.value.set(color);
+    curtain = { t: 0 }; zoneCurtain.visible = !reduceMotion.matches;
+  }
 
-  // ---- warehouse floor + decals (the detailed one) ------------------------------
-  const whFloor = shade(new THREE.Mesh(new THREE.PlaneGeometry(LAYOUT.W, LAYOUT.D), floorMat), false);
-  whFloor.rotation.x = -Math.PI / 2; whFloor.position.y = 0.006;
-  const decals = shade(new THREE.Mesh(new THREE.PlaneGeometry(LAYOUT.W, LAYOUT.D), new THREE.MeshStandardMaterial({ map: T.floorDecals(LAYOUT), transparent: true, roughness: 0.6, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 })), false);
-  decals.rotation.x = -Math.PI / 2; decals.position.y = 0.01;
-  scene.add(whFloor, decals);
-
-  // ---- racks (instanced) ---------------------------------------------------------
-  const uprights = new THREE.InstancedMesh(new THREE.BoxGeometry(0.09, RACK_H, 0.07), uprightMat, RACKS.length * (BAYS + 1) * 2);
-  const beams = new THREE.InstancedMesh(new THREE.BoxGeometry(BAY_W - 0.09, 0.11, 0.05), beamMat, RACKS.length * BAYS * LEVELS * 2);
-  const decks = new THREE.InstancedMesh(new THREE.PlaneGeometry(BAY_W - 0.1, DEPTH - 0.04), deckMat, RACKS.length * BAYS * LEVELS);
-  const braces = new THREE.InstancedMesh(new THREE.BoxGeometry(0.03, 0.03, DEPTH * 1.25), uprightMat, RACKS.length * (BAYS + 1) * 5);
-  let iu = 0, ib = 0, idk = 0, ibr = 0;
-  for (const r of LAYOUT.racks) {
-    for (let k = 0; k <= BAYS; k++) {
-      const x = r.x0 + k * BAY_W;
-      place(uprights, iu++, x, RACK_H / 2, r.z + DEPTH / 2);
-      place(uprights, iu++, x, RACK_H / 2, r.z - DEPTH / 2);
-      for (let bb = 0; bb < 5; bb++) { q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), bb % 2 ? 0.62 : -0.62); braces.setMatrixAt(ibr++, m4.compose(v.set(x, 0.45 + bb * 0.68, r.z), q, sv.set(1, 1, 1))); }
-    }
-    for (let bb = 0; bb < BAYS; bb++) {
-      const cx = r.x0 + (bb + 0.5) * BAY_W;
-      for (let l = 0; l < LEVELS; l++) {
-        place(beams, ib++, cx, LEVEL_Y[l], r.z + DEPTH / 2);
-        place(beams, ib++, cx, LEVEL_Y[l], r.z - DEPTH / 2);
-        q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
-        decks.setMatrixAt(idk++, m4.compose(v.set(cx, LEVEL_Y[l] + 0.06, r.z), q, sv.set(1, 1, 1)));
-      }
+  // ---- stockroom shelving: pine units in an L along the yellow walls ------------------
+  const nUp = SH.racks.length * (BAYS + 1) * 2, nSh = SH.racks.length * BAYS * (LEVELS + 1);
+  const posts = new THREE.InstancedMesh(new THREE.BoxGeometry(0.05, SH.height, 0.05), pineMat, nUp);
+  const boards = new THREE.InstancedMesh(new THREE.BoxGeometry(SH.bayW - 0.04, 0.03, SH.depth), pineMat, nSh);
+  const backs = new THREE.InstancedMesh(new THREE.BoxGeometry(SH.bayW, SH.height, 0.015), pineDark, SH.racks.length * BAYS);
+  let ip = 0, ibd = 0, ibk = 0;
+  for (const r of Object.values(RACK)) {
+    const rot = rackRot(r);
+    for (let k = 0; k <= BAYS; k++) for (const vv of [-SH.depth / 2, SH.depth / 2]) { const [x, z] = rackPoint(r, k * SH.bayW, vv); place(posts, ip++, x, SH.height / 2, z, 1, 1, 1, rot); }
+    for (let k = 0; k < BAYS; k++) {
+      const [bx, bz] = rackPoint(r, (k + 0.5) * SH.bayW, -SH.depth / 2 + 0.01); place(backs, ibk++, bx, SH.height / 2, bz, 1, 1, 1, rot);
+      for (const y of [...SH.levels, SH.height - 0.04]) { const [x, z] = rackPoint(r, (k + 0.5) * SH.bayW, 0); place(boards, ibd++, x, y, z, 1, 1, 1, rot); }
     }
   }
-  for (const mesh of [uprights, beams, braces, decks]) scene.add(shade(mesh));
+  for (const mesh of [posts, boards, backs]) scene.add(shade(mesh));
 
-  // ---- bins: cardboard or blue totes, one printed label each --------------------
+  // boxes: cardboard cartons or white parts trays, one printed label each
   const bins = [];
-  for (const r of LAYOUT.racks) for (let b = 1; b <= BAYS; b++) for (let l = 1; l <= LEVELS; l++) for (const sd of SIDES) {
-    const i = bins.length, tote = hash(i) < 0.32;
-    const h = tote ? 0.42 : 0.5 + hash(i + 7) * 0.26, w = tote ? 0.9 : 0.86 + hash(i + 3) * 0.12;
-    const cx = r.x0 + (b - 0.5) * BAY_W + (sd === "L" ? -0.58 : 0.58) + (hash(i + 5) - 0.5) * 0.06;
-    bins.push({ id: `bin-${r.name}-${b}-${l}-${sd}`, code: `${r.name}-${b}-${l}-${sd}`, rack: r.name, bay: b, level: l, side: sd, x: cx, y: LEVEL_Y[l - 1] + 0.07 + h / 2, z: r.z + (hash(i + 9) - 0.5) * 0.05, w, h, d: tote ? 0.6 : 0.72, kind: tote ? "tote" : "card", rot: (hash(i + 11) - 0.5) * 0.05 });
+  for (const r of Object.values(RACK)) for (let b = 1; b <= BAYS; b++) for (let l = 1; l <= LEVELS; l++) for (const sd of SIDES) {
+    const i = bins.length, tray = hash(i) < 0.28;
+    const h = tray ? 0.16 : 0.26 + hash(i + 7) * 0.2, w = tray ? 0.44 : 0.4 + hash(i + 3) * 0.06, d = tray ? 0.38 : 0.36;
+    const u = (b - 0.5) * SH.bayW + (sd === "L" ? -0.25 : 0.25) + (hash(i + 5) - 0.5) * 0.03;
+    const [x, z] = rackPoint(r, u, (hash(i + 9) - 0.5) * 0.03 + 0.02);
+    const rot = rackRot(r) + (hash(i + 11) - 0.5) * 0.06;
+    bins.push({ id: `bin-${r.name}-${b}-${l}-${sd}`, code: `${r.name}-${b}-${l}-${sd}`, rack: r.name, bay: b, level: l, side: sd, x, z, y: SH.levels[l - 1] + 0.015 + h / 2, w, h, d, rot, kind: tray ? "tray" : "card", front: r.front });
   }
-  const cardBins = bins.filter((b) => b.kind === "card"), toteBins = bins.filter((b) => b.kind === "tote");
+  const cardBins = bins.filter((b) => b.kind === "card"), trayBins = bins.filter((b) => b.kind === "tray");
   const cardMesh = new THREE.InstancedMesh(unit, cardMat, cardBins.length);
-  const toteMesh = new THREE.InstancedMesh(toteGeometry(), toteMat, toteBins.length);
+  const trayMesh = new THREE.InstancedMesh(trayGeometry(), trayMat, trayBins.length);
   cardBins.forEach((b, i) => { b.mesh = cardMesh; b.instance = i; place(cardMesh, i, b.x, b.y, b.z, b.w, b.h, b.d, b.rot); });
-  toteBins.forEach((b, i) => { b.mesh = toteMesh; b.instance = i; place(toteMesh, i, b.x, b.y - b.h / 2, b.z, b.w, b.h, b.d, b.rot); });
-  for (const mesh of [cardMesh, toteMesh]) { mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(mesh.count * 3).fill(1), 3); scene.add(shade(mesh)); }
+  trayBins.forEach((b, i) => { b.mesh = trayMesh; b.instance = i; place(trayMesh, i, b.x, b.y - b.h / 2, b.z, b.w, b.h, b.d, b.rot); });
+  for (const mesh of [cardMesh, trayMesh]) { mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(mesh.count * 3).fill(1), 3); scene.add(shade(mesh)); }
   const binById = new Map(bins.map((b) => [b.id, b]));
   for (const b of bins) { b.base = new THREE.Matrix4(); b.mesh.getMatrixAt(b.instance, b.base); b.visible = true; }
 
   const atlas = new T.LabelAtlas(bins.length);
   const labelMat = new THREE.MeshStandardMaterial({ map: atlas.texture, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -1 });
-  const labelGeo = new THREE.PlaneGeometry(0.38, 0.19);
+  const labelGeo = new THREE.PlaneGeometry(0.24, 0.12);
   const cellAttr = new THREE.InstancedBufferAttribute(new Float32Array(bins.length * 2), 2);
   labelGeo.setAttribute("aCell", cellAttr);
   labelMat.onBeforeCompile = (sh) => {
@@ -276,40 +359,15 @@ export function createScene(canvas, hooks) {
   };
   const labels = new THREE.InstancedMesh(labelGeo, labelMat, bins.length);
   bins.forEach((b, i) => {
-    const [cx, cy] = atlas.cellUV(i);
-    cellAttr.setXY(i, cx, cy);
-    const ly = b.kind === "tote" ? b.y - b.h * 0.1 : b.y - b.h * 0.18;
-    place(labels, i, b.x + Math.sin(b.rot) * b.d / 2, ly, b.z + (b.d / 2) * Math.cos(b.rot) + 0.004, 1, 1, 1, b.rot);
+    const [cx, cy] = atlas.cellUV(i); cellAttr.setXY(i, cx, cy);
+    const off = b.d / 2 + 0.004;
+    place(labels, i, b.x + b.front[0] * off, b.kind === "tray" ? b.y - b.h * 0.05 : b.y - b.h * 0.12, b.z + b.front[1] * off, 1, 1, 1, b.rot);
     b.label = i; b.labelBase = new THREE.Matrix4(); labels.getMatrixAt(i, b.labelBase);
   });
   labels.receiveShadow = true;
   scene.add(labels);
 
-  // warehouse high-bay lamps (hidden once the roof lifts) + their light pools
-  const fx = [[-6, -2], [0, -4], [0, 0.5], [6, -4], [6, 0.5], [-6, 4.5], [0, 5], [7, 5]];
-  const fixtures = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.34, 0.42, 0.22, 20, 1, true), new THREE.MeshStandardMaterial({ color: "#2d2f33", roughness: 0.4, metalness: 0.8, side: THREE.DoubleSide }), fx.length);
-  const lenses = new THREE.InstancedMesh(new THREE.CircleGeometry(0.36, 20), new THREE.MeshBasicMaterial({ color: "#fff6e6" }), fx.length);
-  const cords = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.008, 0.008, 1.2), metalMat, fx.length);
-  const pools = new THREE.InstancedMesh(new THREE.PlaneGeometry(6, 6), new THREE.MeshBasicMaterial({ map: radialTexture(), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.12, color: "#ffe9c7" }), fx.length);
-  fx.forEach(([x, z], i) => {
-    place(fixtures, i, x, 6.4, z); place(cords, i, x, 7.1, z);
-    q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2); lenses.setMatrixAt(i, m4.compose(v.set(x, 6.29, z), q, sv.set(1, 1, 1)));
-    q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2); pools.setMatrixAt(i, m4.compose(v.set(x, 0.015, z), q, sv.set(1, 1, 1)));
-  });
-  scene.add(fixtures, lenses, cords, pools);
-
-  // ---- trees and parked cars: dressing ------------------------------------------
-  const trunk = shade(new THREE.InstancedMesh(new THREE.CylinderGeometry(0.14, 0.22, 2.6, 8), new THREE.MeshStandardMaterial({ color: "#5a4636", roughness: 0.9 }), TREES.length));
-  const crown = shade(new THREE.InstancedMesh(treeCrownGeometry(), kitMat, TREES.length));
-  TREES.forEach(([x, z], i) => { const s = 0.8 + hash(i + 3) * 0.55; place(trunk, i, x, 1.3 * s, z, s, s, s); place(crown, i, x, 2.2 * s, z, s, s, s, hash(i) * 6); });
-  scene.add(trunk, crown);
-  const cars = shade(new THREE.InstancedMesh(carGeometry(), kitMat, 5));
-  [0, 1, 3, 5, 6].forEach((bay, i) => { const x = PARKING.x - PARKING.w / 2 + (bay + 0.5) * (PARKING.w / PARKING.bays); place(cars, i, x, 0, PARKING.z - PARKING.d / 2 + 2.5, 1, 1, 1, (hash(i) - 0.5) * 0.06); });
-  cars.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(15), 3);
-  ["#d7d7d4", "#2c3e57", "#8a1c1c", "#1d1f22", "#9aa3ad"].forEach((c, i) => cars.setColorAt(i, new THREE.Color(c)));
-  scene.add(cars);
-
-  // ---- furniture: one instanced mesh per kind, shared across the campus ----------
+  // ---- furniture: one instanced mesh per kind -----------------------------------------
   const kitMeshes = {};
   for (const kind of KINDS) {
     const mesh = shade(new THREE.InstancedMesh(kitGeometry(kind), kitMat, 64));
@@ -321,11 +379,10 @@ export function createScene(canvas, hooks) {
   }
   let pieces = [], people = [], myId = null, dragState = null, heat = null, outlinePiece = null;
   const pieceAnim = new Map(), deptOf = new Map(), pieceById = new Map(), accents = {};
-  const tone = { ok: new THREE.Color(1, 1, 1), hover: new THREE.Color(1.35, 1.28, 1.3), good: new THREE.Color("#5fbf7f"), fair: new THREE.Color("#e6b44a"), poor: new THREE.Color("#e2574c"), empty: new THREE.Color(0.35, 0.35, 0.37) };
-  const MINE = new THREE.Color(1.3, 1.1, 1.2), BAD = new THREE.Color(1.7, 0.5, 0.5);
+  const tone = { ok: new THREE.Color(1, 1, 1), hover: new THREE.Color(1.3, 1.24, 1.26), good: new THREE.Color("#5fbf7f"), fair: new THREE.Color("#e6b44a"), poor: new THREE.Color("#e2574c"), empty: new THREE.Color(0.35, 0.35, 0.37) };
+  const MINE = new THREE.Color(1.25, 1.08, 1.16), BAD = new THREE.Color(1.7, 0.5, 0.5);
   function pieceWorld(pc) {
-    const b = byB.get(deptOf.get(pc.dept)?.building);
-    if (!b) return null;
+    const b = byB.get(deptOf.get(pc.dept)?.building); if (!b) return null;
     const a = pieceAnim.get(pc.id);
     return { x: b.x + pc.x, z: b.z + pc.z, y: a ? a.lift : 0, rot: a ? a.rot : pc.rot, scale: a ? a.scale : 1, b };
   }
@@ -336,7 +393,6 @@ export function createScene(canvas, hooks) {
     if (pc.owner && pc.owner === myId) return MINE;
     return tone.ok;
   }
-  const visibleIn = (b) => b.open > 0.02 || b.id === "b-store";
   const HIDDEN = new THREE.Matrix4().makeScale(0, 0, 0);
   function layoutPieces() {
     for (const mesh of Object.values(kitMeshes)) { mesh.count = 0; mesh.userData.slots = []; }
@@ -345,7 +401,7 @@ export function createScene(canvas, hooks) {
       const w = pieceWorld(pc); if (!w) continue;
       const i = mesh.count++;
       mesh.userData.slots[i] = pc.id;
-      mesh.setMatrixAt(i, visibleIn(w.b) ? compose(w.x, w.y, w.z, w.scale, w.scale, w.scale, w.rot) : HIDDEN);
+      mesh.setMatrixAt(i, compose(w.x, w.y, w.z, w.scale, w.scale, w.scale, w.rot));
       mesh.setColorAt(i, pieceTint(pc));
     }
     for (const mesh of Object.values(kitMeshes)) { mesh.visible = mesh.count > 0; mesh.instanceMatrix.needsUpdate = true; mesh.instanceColor.needsUpdate = true; mesh.computeBoundingSphere(); }
@@ -354,7 +410,7 @@ export function createScene(canvas, hooks) {
     needsRender = true;
   }
 
-  // ---- people: an avatar at each assigned desk -----------------------------------
+  // ---- people ---------------------------------------------------------------------------
   const avatarMesh = shade(new THREE.InstancedMesh(avatarGeometry(), kitMat, 32));
   const shirtMesh = shade(new THREE.InstancedMesh(shirtGeometry(), kitMat, 32));
   shirtMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(32 * 3).fill(1), 3);
@@ -366,7 +422,7 @@ export function createScene(canvas, hooks) {
     if (desk) { const w = pieceWorld(desk); if (!w) return null; const lx = -0.2, lz = 0.85; return { x: w.x + lx * Math.cos(w.rot) + lz * Math.sin(w.rot), z: w.z - lx * Math.sin(w.rot) + lz * Math.cos(w.rot), rot: w.rot + Math.PI, b: w.b }; }
     const d = deptOf.get(p.dept), b = d && byB.get(d.building); if (!b) return null;
     const k = people.filter((x) => x.dept === p.dept).indexOf(p);
-    return { x: b.x + (b.door?.at || 0) + 1.4 + k * 0.7, z: b.z + b.d / 2 - 1.6, rot: Math.PI, b };
+    return { x: b.x - b.w / 2 + 1.2 + k * 0.8, z: b.z + (b.z < WALKWAY_Z ? b.d / 2 - 0.8 : -b.d / 2 + 0.8), rot: 0, b };
   }
   function layoutAvatars() {
     avatarMesh.count = shirtMesh.count = 0; avatarMesh.userData.slots = []; shirtMesh.userData.slots = [];
@@ -374,7 +430,7 @@ export function createScene(canvas, hooks) {
       const s = avatarSpot(p); if (!s) return;
       const i = avatarMesh.count++; shirtMesh.count++;
       avatarMesh.userData.slots[i] = shirtMesh.userData.slots[i] = p.id;
-      const m = visibleIn(s.b) ? compose(s.x, 0, s.z, 1, 1, 1, s.rot) : HIDDEN;
+      const m = compose(s.x, 0, s.z, 1, 1, 1, s.rot);
       avatarMesh.setMatrixAt(i, m); shirtMesh.setMatrixAt(i, m);
       shirtMesh.setColorAt(i, new THREE.Color(PALETTE[k % PALETTE.length]).multiplyScalar(hover?.type === "person" && hover.id === p.id ? 1.35 : 0.9));
     });
@@ -382,7 +438,7 @@ export function createScene(canvas, hooks) {
     shirtMesh.instanceColor.needsUpdate = true;
   }
 
-  // ---- overlays: selection, ring, route, edit grid ---------------------------------
+  // ---- overlays -------------------------------------------------------------------------
   const outline = new THREE.LineSegments(new THREE.EdgesGeometry(unit), new THREE.LineBasicMaterial({ color: "#ff5c95", transparent: true }));
   outline.visible = false; scene.add(outline);
   const ringMat = new THREE.MeshBasicMaterial({ color: "#ff5c95", transparent: true, opacity: 0.6, depthWrite: false });
@@ -390,18 +446,19 @@ export function createScene(canvas, hooks) {
   ring.rotation.x = -Math.PI / 2; ring.position.y = 0.03; ring.visible = false; scene.add(ring);
   const routeMat = new THREE.ShaderMaterial({
     transparent: true, depthWrite: false, side: THREE.DoubleSide,
-    uniforms: { uTime: { value: 0 }, uReveal: { value: 0 }, uLen: { value: 1 }, uColor: { value: new THREE.Color("#ff5c95") } },
+    uniforms: { uTime: { value: 0 }, uReveal: { value: 0 }, uColor: { value: new THREE.Color("#ff5c95") } },
     vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
-    fragmentShader: `varying vec2 vUv; uniform float uTime, uReveal, uLen; uniform vec3 uColor;
+    fragmentShader: `varying vec2 vUv; uniform float uTime, uReveal; uniform vec3 uColor;
       void main(){ if (vUv.x > uReveal) discard;
         float edge = smoothstep(0.0, 0.18, vUv.y) * smoothstep(1.0, 0.82, vUv.y);
-        float chev = fract(vUv.x * 1.1 - uTime * 1.1 - abs(vUv.y - 0.5) * 0.9);
+        float chev = fract(vUv.x * 1.2 - uTime * 1.1 - abs(vUv.y - 0.5) * 0.9);
         float dash = smoothstep(0.0, 0.08, chev) * smoothstep(0.62, 0.5, chev);
         float head = smoothstep(uReveal - 1.2, uReveal, vUv.x);
-        gl_FragColor = vec4(uColor, edge * (0.22 + dash * 0.7 + head * 0.3)); }`,
+        gl_FragColor = vec4(uColor, edge * (0.25 + dash * 0.7 + head * 0.3)); }`,
   });
   const route = new THREE.Mesh(new THREE.BufferGeometry(), routeMat);
-  route.position.y = 0.035; route.visible = false; route.renderOrder = 2; scene.add(route);
+  route.position.y = 0.03; route.visible = false; route.renderOrder = 2; scene.add(route);
+  let routeLen = 1;
   const gridMat = new THREE.ShaderMaterial({
     transparent: true, depthWrite: false,
     uniforms: { uSize: { value: new THREE.Vector2(10, 10) }, uT: { value: 0 } },
@@ -413,14 +470,13 @@ export function createScene(canvas, hooks) {
         gl_FragColor = vec4(1.0, 0.36, 0.58, (line * 0.22 + major * 0.35) * edgeFade * uT); }`,
   });
   const grid = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), gridMat);
-  grid.rotation.x = -Math.PI / 2; grid.position.y = 0.025; grid.visible = false; grid.renderOrder = 1; scene.add(grid);
-
-  const unitMesh = shade(new THREE.InstancedMesh(new THREE.BoxGeometry(0.14, 0.1, 0.12), cardMat, 12));
+  grid.rotation.x = -Math.PI / 2; grid.position.y = 0.02; grid.visible = false; grid.renderOrder = 1; scene.add(grid);
+  const unitMesh = shade(new THREE.InstancedMesh(new THREE.BoxGeometry(0.12, 0.08, 0.1), cardMat, 12));
   unitMesh.count = 0; scene.add(unitMesh);
   let units = [];
 
-  // ---- colour state -------------------------------------------------------------
-  let hover = null, selected = null, introOn = false;
+  // ---- colour state ---------------------------------------------------------------------
+  let hover = null, selected = null, introOn = false, focusZone = null;
   const binColor = (b) => {
     if (heat) { const h = heat[b.id]; if (h == null) return tone.empty; return h >= 0.97 ? tone.good : h >= 0.8 ? tone.fair : tone.poor; }
     if (hover?.type === "bin" && hover.id === b.id && selected?.id !== b.id) return tone.hover;
@@ -428,80 +484,96 @@ export function createScene(canvas, hooks) {
   };
   function repaint() {
     for (const b of bins) b.mesh.setColorAt(b.instance, binColor(b));
-    cardMesh.instanceColor.needsUpdate = toteMesh.instanceColor.needsUpdate = true;
-    accentParts.forEach((p) => accentMesh.setColorAt(p.i, new THREE.Color(accents[p.b.id] || "#8a8a8a").multiplyScalar(hover?.type === "building" && hover.id === p.b.id ? 1.4 : 1)));
-    accentMesh.instanceColor.needsUpdate = true;
+    cardMesh.instanceColor.needsUpdate = trayMesh.instanceColor.needsUpdate = true;
+    for (const b of B) {
+      const c = new THREE.Color(accents[b.id] || "#888");
+      zoneColor.setXYZ(b.zi, c.r, c.g, c.b);
+      zoneSize.setZ(b.zi, focusZone === b.id ? 1 : hover?.type === "building" && hover.id === b.id ? 0.7 : 0);
+    }
+    zoneColor.needsUpdate = zoneSize.needsUpdate = true;
     layoutPieces();
   }
 
-  // ---- building animation: assemble, open (roof lifts, walls cut away) -------------
-  let buildingsDirty = true;
+  // ---- the storey animation: assemble on load, lift the floors above to go in ------------
+  // tower.open: 0 = outside, 1 = inside Verlet's floor
+  const tower = { open: 0, vel: 0, target: 0, assemble: 1, assembleT: null };
+  let towerDirty = true;
   const S = new THREE.Matrix4(), M = new THREE.Matrix4(), R = new THREE.Matrix4(), Tm = new THREE.Matrix4(), Ti = new THREE.Matrix4();
-  function updateBuildings(dt) {
+  function storeyOffset(k) {
+    // storeys above Verlet's lift in sequence, highest first, tilting slightly as they go
+    const o = tower.open;
+    if (k <= 0) return null;
+    const delay = (ABOVE + 1 - k) * 0.08, ok = Math.min(1, Math.max(0, (o - delay) / (1 - delay)));
+    return { lift: ok * (8 + k * 6), tilt: ok * 0.08 * k, shrink: 1 - smooth(0.7, 1, ok) };
+  }
+  function assembleOffset(k) {
+    // on load the block builds up storey by storey from the street
+    if (tower.assemble >= 1) return { drop: 0, scale: 1 };
+    const t = tower.assembleT - (k + BELOW) * 0.16;
+    const a = Math.min(1, Math.max(0, t / 0.9));
+    return { drop: (1 - easeOutBounce(a)) * 12, scale: a > 0 ? 1 : 0.0001 };
+  }
+  function storeyMatrix(k, base) {
+    const as = assembleOffset(k), so = storeyOffset(k);
+    let lift = as.drop, tilt = 0, shrink = as.scale;
+    if (so) { lift += so.lift; tilt = so.tilt; shrink *= so.shrink; }
+    shrink = Math.max(0.0001, shrink);
+    const cy = k * FH;
+    Tm.makeTranslation(PCX, cy + lift, PCZ); Ti.makeTranslation(-PCX, -cy, -PCZ);
+    e3.set(tilt * 0.4, tilt, 0); R.makeRotationFromEuler(e3);
+    S.makeScale(shrink, shrink, shrink);
+    return M.copy(Tm).multiply(R).multiply(S).multiply(Ti).multiply(base);
+  }
+  function updateTower(dt) {
     let moving = false;
-    for (const b of B) {
-      const k = 70, c = 2 * Math.sqrt(k) * 0.72;   // slightly under-damped: roofs land with a bounce
-      b.vel += (k * (b.target - b.open) - c * b.vel) * dt; b.open += b.vel * dt;
-      if (Math.abs(b.target - b.open) < 0.0005 && Math.abs(b.vel) < 0.0005) { b.open = b.target; b.vel = 0; } else moving = true;
-      if (b.assembleT != null) { b.assembleT += dt; b.assemble = Math.min(1, Math.max(0, (b.assembleT - b.idx * 0.22) / 1.15)); if (b.assemble >= 1) b.assembleT = null; moving = true; }
-    }
-    if (!moving && !buildingsDirty) return false;
-    buildingsDirty = false;
-    const grow = (b) => (b.assemble >= 1 ? 1 : Math.max(0, easeOutBack(b.assemble)));
-    for (const mesh of wallMeshes) for (const p of mesh.userData.parts) {
-      const o = Math.min(1, Math.max(0, p.b.open));
-      const f = (p.cut ? 1 - o * (1 - CUT_H / p.b.H) : 1) * grow(p.b);
-      S.makeScale(1, Math.max(0.0001, f), 1); mesh.setMatrixAt(p.i, M.multiplyMatrices(S, p.m));
-    }
-    for (const [mesh, parts] of [[glassMesh, glassParts], [doorMesh, doorParts]]) for (const p of parts) {
-      const o = Math.min(1, Math.max(0, p.b.open));
-      const f = (p.cut ? 1 - smooth(0.05, 0.45, o) : 1) * grow(p.b);
-      S.makeScale(1, Math.max(0.0001, f), 1); mesh.setMatrixAt(p.i, M.multiplyMatrices(S, p.m));
-    }
-    // the roof group lifts, tilts and spins away, then shrinks out; drops in on assemble
-    for (const [mesh, parts] of [[roofMesh, roofParts], [hvacMesh, hvacParts], [accentMesh, accentParts]]) for (const p of parts) {
-      const b = p.b, o = b.open;
-      const drop = b.assemble >= 1 ? 0 : (1 - easeOutBounce(Math.max(0, b.assemble))) * 16;
-      const shrink = Math.max(0.0001, (1 - smooth(0.55, 0.98, o)) * (b.assemble > 0 || b.assemble >= 1 ? 1 : 0.0001));
-      Tm.makeTranslation(b.x, b.H + o * 18 + drop, b.z); Ti.makeTranslation(-b.x, -b.H, -b.z);
-      e3.set(o * 0.42, o * 0.6, -o * 0.18); R.makeRotationFromEuler(e3);
-      S.makeScale(shrink, shrink, shrink);
-      mesh.setMatrixAt(p.i, M.copy(Tm).multiply(R).multiply(S).multiply(Ti).multiply(p.m));
-    }
-    for (const mesh of [...wallMeshes, glassMesh, doorMesh, roofMesh, hvacMesh, accentMesh]) { mesh.instanceMatrix.needsUpdate = true; mesh.computeBoundingSphere(); }
-    const st = byB.get("b-store");
-    fixtures.visible = lenses.visible = cords.visible = st.open < 0.08;
-    layoutPieces();
+    const k = 60, c = 2 * Math.sqrt(k) * 0.8;
+    tower.vel += (k * (tower.target - tower.open) - c * tower.vel) * dt; tower.open += tower.vel * dt;
+    if (Math.abs(tower.target - tower.open) < 0.0005 && Math.abs(tower.vel) < 0.0005) { tower.open = tower.target; tower.vel = 0; } else moving = true;
+    if (tower.assembleT != null) { tower.assembleT += dt; tower.assemble = Math.min(1, tower.assembleT / ((BELOW + ABOVE + 2) * 0.16 + 0.9)); if (tower.assemble >= 1) tower.assembleT = null; moving = true; }
+    if (curtain) { curtain.t += dt; curtainMatZ.uniforms.uRise.value = curtain.t < 0.6 ? easeOutBounce(curtain.t / 0.6) : Math.max(0, 1 - (curtain.t - 1.2) / 0.8); if (curtain.t > 2.0) { curtain = null; zoneCurtain.visible = false; } moving = true; }
+    if (!moving && !towerDirty) return false;
+    towerDirty = false;
+    for (const p of storeyParts) storeyMesh.setMatrixAt(p.i, storeyMatrix(p.k, p.m));
+    for (const p of bandParts) bandMesh.setMatrixAt(p.i, storeyMatrix(p.k, p.m));
+    for (const p of roofParts) roofMesh.setMatrixAt(p.i, storeyMatrix(p.k, p.m));
+    // Verlet's ceiling rides with the storey above
+    for (const [mesh, parts] of ceilingGroup) for (const p of parts) mesh.setMatrixAt(p.i, storeyMatrix(1, p.m));
+    // Verlet's facade drops to sill height; the pink band stays
+    const o = Math.min(1, Math.max(0, tower.open)), as0 = assembleOffset(0);
+    for (const p of facadeParts) { S.makeScale(1, Math.max(0.0001, (1 - o * 0.78) * as0.scale), 1); facadeMesh.setMatrixAt(p.i, M.multiplyMatrices(S, p.m)); }
+    for (const mesh of [storeyMesh, bandMesh, roofMesh, facadeMesh, ceilMesh, beamMesh, ledMesh]) { mesh.instanceMatrix.needsUpdate = true; mesh.computeBoundingSphere(); }
+    zoneMat.uniforms.uT.value = smooth(0.5, 1, o);
+    const inside = o > 0.02;
+    for (const obj of [vFloor, wallMesh, colMesh, partMesh, mullMesh, louvreMesh, posts, boards, backs, cardMesh, trayMesh, labels, avatarMesh, shirtMesh, bulkMesh, ...Object.values(kitMeshes)]) obj.visible = inside || o > 0 || obj === vFloor ? inside : false;
+    for (const mesh of Object.values(kitMeshes)) if (inside) mesh.visible = mesh.count > 0;
     return true;
   }
 
-  // ---- picking ------------------------------------------------------------------------
+  // ---- picking ---------------------------------------------------------------------------
   const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
   const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-  function setRay(clientX, clientY) {
-    const r = canvas.getBoundingClientRect();
-    ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
-    ray.setFromCamera(ndc, camera);
-  }
-  function pick(clientX, clientY) {
-    setRay(clientX, clientY);
-    const targets = [cardMesh, toteMesh, avatarMesh, shirtMesh, ...Object.values(kitMeshes).filter((m) => m.visible), ...wallMeshes, roofMesh, accentMesh, glassMesh, doorMesh, slabMesh];
+  function setRay(cx, cy) { const r = canvas.getBoundingClientRect(); ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1); ray.setFromCamera(ndc, camera); }
+  function pick(cx, cy) {
+    setRay(cx, cy);
+    if (tower.target < 0.5) {
+      const hit = ray.intersectObjects([storeyMesh, bandMesh, roofMesh, facadeMesh, verletBand], false)[0];
+      return hit ? { type: "tower" } : null;
+    }
+    const targets = [cardMesh, trayMesh, avatarMesh, shirtMesh, ...Object.values(kitMeshes).filter((m) => m.visible), zoneMesh];
     for (const h of ray.intersectObjects(targets, false)) {
       const o = h.object;
-      if (o === cardMesh || o === toteMesh) { const b = (o === cardMesh ? cardBins : toteBins)[h.instanceId]; if (b?.visible) return { type: "bin", id: b.id }; continue; }
+      if (o === cardMesh || o === trayMesh) { const b = (o === cardMesh ? cardBins : trayBins)[h.instanceId]; if (b?.visible) return { type: "bin", id: b.id }; continue; }
       if (o === avatarMesh || o === shirtMesh) return { type: "person", id: o.userData.slots[h.instanceId] };
       if (o.userData.slots) return { type: "piece", id: o.userData.slots[h.instanceId] };
-      const part = allParts.find((p) => p.mesh === o && p.i === h.instanceId);
-      if (part) return { type: "building", id: part.b.id };
+      if (o === zoneMesh) return { type: "building", id: B[h.instanceId].id };
     }
     return null;
   }
 
-  // ---- pointer: click to pick, drag furniture in edit mode ------------------------
+  // ---- pointer: pick, and drag furniture in edit mode ----------------------------------
   let down = null, edit = null, pendingMove = null, flight = null;
   canvas.addEventListener("pointerdown", (e) => {
-    down = { x: e.clientX, y: e.clientY };
-    flight = null;
+    down = { x: e.clientX, y: e.clientY }; flight = null;
     if (!edit) return;
     const hit = pick(e.clientX, e.clientY);
     if (hit?.type !== "piece" || !edit.canMove(hit.id)) return;
@@ -509,8 +581,7 @@ export function createScene(canvas, hooks) {
     setRay(e.clientX, e.clientY);
     const p = ray.ray.intersectPlane(groundPlane, new THREE.Vector3());
     dragState = { id: hit.id, ox: p ? w.x - p.x : 0, oz: p ? w.z - p.z : 0, start: { x: pc.x, z: pc.z }, valid: true, moved: false };
-    controls.enabled = false;
-    canvas.setPointerCapture(e.pointerId);
+    controls.enabled = false; canvas.setPointerCapture(e.pointerId);
     anim(hit.id).liftTo = 0.22;
     hooks.onPieceSelect?.(hit.id);
   });
@@ -533,8 +604,7 @@ export function createScene(canvas, hooks) {
       const a = anim(pc.id); a.liftTo = 0;
       if (!d.valid) { pc.x = d.start.x; pc.z = d.start.z; hooks.onPieceRejected?.(pc.id); }
       else if (d.moved) { a.lift = 0.22; a.vy = -1.5; a.drop = true; hooks.onPieceMoved?.(pc.id, pc.x, pc.z); }
-      layoutPieces(); selectPiece(pc.id);
-      down = null;
+      layoutPieces(); selectPiece(pc.id); down = null;
       return;
     }
     if (!down) return;
@@ -545,27 +615,28 @@ export function createScene(canvas, hooks) {
   });
   canvas.addEventListener("pointerleave", () => { pendingMove = null; if (hover) { hover = null; repaint(); hooks.onHover?.(null); } });
 
-  // ---- layout validation: inside the walls, door and racks kept clear, no overlaps
+  // ---- layout validation: stay in the zone, keep clear of columns, shelving, others --
   function footprint(pc) {
     const k = KIT[pc.kind], quarter = Math.round((((pc.rot % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI / 2)) % 2;
     const w = quarter ? k.d : k.w, d = quarter ? k.w : k.d;
     return { x0: pc.x - w / 2, x1: pc.x + w / 2, z0: pc.z - d / 2, z1: pc.z + d / 2 };
   }
   const overlap = (a, b) => a.x0 < b.x1 - 0.02 && a.x1 > b.x0 + 0.02 && a.z0 < b.z1 - 0.02 && a.z1 > b.z0 + 0.02;
+  const OBST = [
+    ...COLUMNS.map(([x, z]) => ({ x0: x - COLUMN / 2 - 0.05, x1: x + COLUMN / 2 + 0.05, z0: z - COLUMN / 2 - 0.05, z1: z + COLUMN / 2 + 0.05 })),
+    ...Object.values(RACK).map((r) => { const [ax, az] = rackPoint(r, 0, -SH.depth / 2), [bx, bz] = rackPoint(r, r.len, SH.depth / 2 + 0.9); return { x0: Math.min(ax, bx), x1: Math.max(ax, bx), z0: Math.min(az, bz), z1: Math.max(az, bz) }; }),
+  ];
   function validPlacement(pc) {
     const d = deptOf.get(pc.dept), b = byB.get(d.building), f = footprint(pc);
-    const hw = b.w / 2 - WALL_T / 2 - 0.15, hd = b.d / 2 - WALL_T / 2 - 0.15;
+    const hw = b.w / 2 - 0.1, hd = b.d / 2 - 0.1;
     if (f.x0 < -hw || f.x1 > hw || f.z0 < -hd || f.z1 > hd) return false;
-    const door = { x0: (b.door?.at || 0) - (b.door?.w || 2) / 2 - 0.2, x1: (b.door?.at || 0) + (b.door?.w || 2) / 2 + 0.2, z0: b.d / 2 - 1.8, z1: b.d / 2 };
-    if (overlap(f, door)) return false;
-    if (b.id === "b-store") {
-      for (const r of LAYOUT.racks) if (overlap(f, { x0: r.x0 - 0.6, x1: r.x1 + 0.6, z0: r.z - 0.6, z1: r.z + 1.6 })) return false;
-      if (overlap(f, { x0: -11.8, x1: -4, z0: 3.6, z1: 8 })) return false;    // walkway from the roller door
-    }
+    const wf = { x0: f.x0 + b.x, x1: f.x1 + b.x, z0: f.z0 + b.z, z1: f.z1 + b.z };
+    if (wf.x0 < AREA.x0 + 0.25 || wf.z0 < AREA.z0 + 0.25 || wf.x1 > AREA.x1 - 0.1 || wf.z1 > AREA.z1 - 0.3) return false;
+    if (OBST.some((o) => overlap(wf, o))) return false;
     return !pieces.some((o) => o.id !== pc.id && o.dept === pc.dept && overlap(f, footprint(o)));
   }
   function freeSpot(deptId, kind) {
-    const d = deptOf.get(deptId), b = byB.get(d.building);
+    const b = byB.get(deptOf.get(deptId).building);
     const probe = { id: "_probe", dept: deptId, kind, x: 0, z: 0, rot: 0 };
     for (let r = 0; r < Math.max(b.w, b.d); r += 0.5) for (let a = 0; a < 24; a++) {
       probe.x = Math.round(Math.cos((a / 24) * Math.PI * 2) * r * 4) / 4; probe.z = Math.round(Math.sin((a / 24) * Math.PI * 2) * r * 4) / 4;
@@ -574,7 +645,7 @@ export function createScene(canvas, hooks) {
     return null;
   }
 
-  // ---- piece animation: drop in, lift while dragged, spring rotation, shrink out --
+  // ---- piece animation ------------------------------------------------------------------
   function anim(id) {
     let a = pieceAnim.get(id);
     if (!a) { const pc = pieceById.get(id); a = { lift: 0, vy: 0, liftTo: 0, rot: pc?.rot || 0, scale: 1, scaleTo: 1 }; pieceAnim.set(id, a); }
@@ -584,10 +655,8 @@ export function createScene(canvas, hooks) {
     let moving = false;
     for (const [id, a] of pieceAnim) {
       const pc = pieceById.get(id);
-      if (a.drop) {
-        a.vy -= 22 * dt; a.lift += a.vy * dt; moving = true;
-        if (a.lift <= a.liftTo) { a.lift = a.liftTo; if (Math.abs(a.vy) > 1.4) a.vy = -a.vy * 0.32; else { a.vy = 0; a.drop = false; } }
-      } else { const nl = damp(a.lift, a.liftTo, 14, dt); if (Math.abs(nl - a.lift) > 0.0005) moving = true; a.lift = Math.abs(nl - a.liftTo) < 0.0005 ? a.liftTo : nl; }
+      if (a.drop) { a.vy -= 22 * dt; a.lift += a.vy * dt; moving = true; if (a.lift <= a.liftTo) { a.lift = a.liftTo; if (Math.abs(a.vy) > 1.4) a.vy = -a.vy * 0.32; else { a.vy = 0; a.drop = false; } } }
+      else { const nl = damp(a.lift, a.liftTo, 14, dt); if (Math.abs(nl - a.lift) > 0.0005) moving = true; a.lift = Math.abs(nl - a.liftTo) < 0.0005 ? a.liftTo : nl; }
       if (pc) { if (Math.abs(pc.rot - a.rot) > 0.001) { a.rot = damp(a.rot, pc.rot, 11, dt); moving = true; } else a.rot = pc.rot; }
       const ns = damp(a.scale, a.scaleTo, 11, dt);
       if (Math.abs(ns - a.scaleTo) > 0.002) { a.scale = ns; moving = true; } else a.scale = a.scaleTo;
@@ -598,36 +667,36 @@ export function createScene(canvas, hooks) {
     return moving;
   }
 
-  // ---- camera flights ---------------------------------------------------------------
+  // ---- cameras ----------------------------------------------------------------------------
   function flyTo(pos, target, ms = 1500, lift = null) {
     if (reduceMotion.matches) { camera.position.copy(pos); controls.target.copy(target); controls.update(); needsRender = true; return null; }
     const dist = camera.position.distanceTo(pos);
-    flight = { p0: camera.position.clone(), t0: controls.target.clone(), p1: pos.clone(), t1: target.clone(), start: performance.now(), ms, lift: lift ?? (dist > 12 ? Math.min(16, dist * 0.22) : 0.3), ease: easeInOut };
+    flight = { p0: camera.position.clone(), t0: controls.target.clone(), p1: pos.clone(), t1: target.clone(), start: performance.now(), ms, lift: lift ?? (dist > 12 ? Math.min(14, dist * 0.2) : 0.3), ease: easeInOut };
     return flight;
   }
   const narrow = () => canvas.clientWidth < 700;
-  const campusShot = () => (narrow() ? [new THREE.Vector3(18, 118, 96), new THREE.Vector3(-3, -6, 8)] : [new THREE.Vector3(46, 64, 82), new THREE.Vector3(10, 0, -5)]);
-  function deptShot(buildingId) {
-    const b = byB.get(buildingId);
-    if (b.id === "b-store") return narrow() ? [new THREE.Vector3(7.5, 15, 19), new THREE.Vector3(0.6, -1.6, 2.6)] : [new THREE.Vector3(12.5, 10.5, 15.5), new THREE.Vector3(2.4, 0.6, -1.4)];
-    const r = Math.max(b.w, b.d);
-    if (narrow()) return [new THREE.Vector3(b.x + r * 0.35, r * 1.35, b.z + b.d / 2 + r * 1.0), new THREE.Vector3(b.x, -1.8, b.z + b.d * 0.25)];
-    return [new THREE.Vector3(b.x + r * 0.6, r * 0.8, b.z + b.d / 2 + r * 0.7), new THREE.Vector3(b.x + b.w * 0.14, 0.4, b.z)];
+  const towerShot = () => (narrow() ? [new THREE.Vector3(PCX + 34, 30, PL.z1 + 92), new THREE.Vector3(PCX + 2, GROUND_Y - 4, PCZ + 10)] : [new THREE.Vector3(PCX + 58, 22, PL.z1 + 62), new THREE.Vector3(PCX + 12, GROUND_Y + 9, PCZ)]);
+  const floorShot = () => (narrow() ? [new THREE.Vector3(4, 58, 46), new THREE.Vector3(2, -10, 14)] : [new THREE.Vector3(20, 34, 40), new THREE.Vector3(5, -1, 2)]);
+  function zoneShot(id) {
+    const b = byB.get(id), r = Math.max(b.w, b.d);
+    if (narrow()) return [new THREE.Vector3(b.x + r * 0.2, r * 1.6 + 4, b.z + r * 1.2 + 4), new THREE.Vector3(b.x, -2, b.z + r * 0.35)];
+    return [new THREE.Vector3(b.x + r * 0.45, r * 0.55 + 3.5, b.z + r * 0.62 + 3.5), new THREE.Vector3(b.x + b.w * 0.12, 0.3, b.z)];
   }
   function focusPoint(sel) {
     if (!sel) return null;
     if (sel.type === "bin") { const b = binById.get(sel.id); return b && new THREE.Vector3(b.x, b.y, b.z); }
     if (sel.type === "piece") { const pc = pieceById.get(sel.id); const w = pc && pieceWorld(pc); return w && new THREE.Vector3(w.x, 0.9, w.z); }
     if (sel.type === "person") { const p = people.find((x) => x.id === sel.id); const s = p && avatarSpot(p); return s && new THREE.Vector3(s.x, 1.1, s.z); }
-    if (sel.type === "building") { const b = byB.get(sel.id); return b && new THREE.Vector3(b.x, b.H, b.z); }
+    if (sel.type === "building") { const b = byB.get(sel.id); return b && new THREE.Vector3(b.x, 0.2, b.z); }
+    if (sel.type === "tower") return new THREE.Vector3((AREA.x0 + AREA.x1) / 2, 0, PL.z1);
     return null;
   }
   function focus(sel) {
     const p = focusPoint(sel); if (!p) return;
     if (sel.type === "bin") {
-      const b = binById.get(sel.id), next = { A: "B", B: "C" }[b.rack];
-      const camZ = next ? RACK_Z[next] - DEPTH / 2 - 0.12 : p.z + 3.6;
-      flyTo(new THREE.Vector3(p.x + (narrow() ? 0.5 : 1.25), Math.max(1.4, p.y + 0.42), camZ), new THREE.Vector3(p.x + (narrow() ? 0.05 : 0.62), p.y - (narrow() ? 1.0 : 0.04), p.z));
+      const b = binById.get(sel.id), n = b.front, side = [n[1], -n[0]];   // stand in front, a little off-axis
+      const dist = narrow() ? 3.4 : 2.6, off = narrow() ? 0 : 0.6;
+      flyTo(new THREE.Vector3(p.x + n[0] * dist + side[0] * -off, Math.max(1.4, p.y + 0.35), p.z + n[1] * dist + side[1] * -off), new THREE.Vector3(p.x + side[0] * -off * 0.7, p.y - (narrow() ? 0.8 : 0.05), p.z + side[1] * -off * 0.7));
       return;
     }
     const rot = sel.type === "piece" ? pieceWorld(pieceById.get(sel.id)).rot : sel.type === "person" ? avatarSpot(people.find((x) => x.id === sel.id)).rot + Math.PI : 0;
@@ -647,54 +716,53 @@ export function createScene(canvas, hooks) {
   function placeOutline(id) {
     const pc = pieceById.get(id); if (!pc) { outline.visible = false; outlinePiece = null; return; }
     const w = pieceWorld(pc), f = footprint(pc), h = kitMeshes[pc.kind].geometry.boundingBox.max.y;
+    const b = w.b;
     outline.visible = true;
-    outline.position.set(w.x, w.y + (h + 0.04) / 2, w.z);
+    outline.position.set(b.x + (f.x0 + f.x1) / 2, w.y + (h + 0.04) / 2, b.z + (f.z0 + f.z1) / 2);
     outline.scale.set(f.x1 - f.x0 + 0.08, h + 0.08, f.z1 - f.z0 + 0.08);
     outline.rotation.y = 0;
     outline.material.color.set(dragState && !dragState.valid ? "#ff5a4f" : "#ff5c95");
     needsRender = true;
   }
 
-  // ---- routes: gate → street → (site path) → door → inside -------------------------
-  function approach(sel) {
-    if (sel.type === "bin") { const b = binById.get(sel.id), az = RACK_Z[b.rack] + DEPTH / 2 + 1.15; return { b: byB.get("b-store"), start: [LAYOUT.entrance.x, LAYOUT.entrance.z], inside: [[X0 - 1.1, LAYOUT.walkZ], [X0 - 1.1, az], [b.x, az]] }; }
-    let spot = null;
-    if (sel.type === "piece") { const pc = pieceById.get(sel.id), w = pc && pieceWorld(pc); if (w) { const dd = KIT[pc.kind].d / 2 + 0.8; spot = { x: w.x + Math.sin(w.rot) * dd, z: w.z + Math.cos(w.rot) * dd, b: w.b }; } }
-    if (sel.type === "person") { const p = people.find((x) => x.id === sel.id); spot = p && avatarSpot(p); }
-    if (!spot) return null;
-    const b = spot.b, dx = b.x + (b.door?.at || 0), din = b.z + b.d / 2 - 1.0;
-    return { b, start: [dx, din], inside: [[dx, spot.z], [spot.x, spot.z]] };
+  // ---- routes: lifts → partition door → walkway → into the zone → to the thing ---------
+  function target(sel) {
+    if (sel.type === "bin") { const b = binById.get(sel.id); return [b.x + b.front[0] * 0.9, b.z + b.front[1] * 0.9]; }
+    if (sel.type === "piece") { const pc = pieceById.get(sel.id), w = pc && pieceWorld(pc); if (!w) return null; const dd = KIT[pc.kind].d / 2 + 0.7; return [w.x + Math.sin(w.rot) * dd, w.z + Math.cos(w.rot) * dd]; }
+    if (sel.type === "person") { const p = people.find((x) => x.id === sel.id); const s = p && avatarSpot(p); return s && [s.x + Math.sin(s.rot) * 0.8, s.z + Math.cos(s.rot) * 0.8]; }
+    return null;
   }
   function showRoute(sel) {
-    const a = approach(sel); if (!a) { clearRoute(); return 0; }
-    const b = a.b, dx = b.x + (b.door?.at || 0), dz = b.z + b.d / 2;
-    let pts = [[SITE.gate.x, SITE.gate.z], [SITE.gate.x, SITE.street.z]];
-    const spur = PATHS.find((p) => p[0][1] === SITE.street.z && Math.abs(p[p.length - 1][0] - dx) < 0.6 && p !== PATHS[1]);
-    if (spur) pts.push(...spur); else pts.push([dx, SITE.street.z], [dx, dz + 0.6]);
-    pts.push([dx, dz - 0.3], a.start, ...a.inside);
+    const t = target(sel); if (!t) { clearRoute(); return 0; }
+    let pts = [[LIFTS.x, LIFTS.z + 1.6], [LIFTS.x, DOOR.z], [AREA.x1 + 1.2, DOOR.z], [AREA.x1 - 1.2, DOOR.z], [AREA.x1 - 2.2, WALKWAY_Z]];
+    // along the walkway, dodging columns, then straight into the zone
+    const cx = THREE.MathUtils.clamp(t[0], AREA.x0 + 1, AREA.x1 - 2.2);
+    pts.push([cx + (cx > COLUMNS[0][0] ? 0 : 0), WALKWAY_Z], [t[0], WALKWAY_Z], [t[0], t[1]]);
+    for (const [x, z] of COLUMNS) for (const p of pts) if (Math.abs(p[0] - x) < 0.5 && Math.abs(p[1] - z) < 0.5) p[0] += 0.8;
     pts = pts.filter((p, i) => i === 0 || Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) > 0.05);
     const geo = ribbon(chaikin(pts, 3), 0.5);
     route.geometry.dispose(); route.geometry = geo;
-    routeMat.uniforms.uLen.value = geo.userData.length;
-    routeMat.uniforms.uReveal.value = reduceMotion.matches ? geo.userData.length : 0;
+    routeLen = geo.userData.length;
+    routeMat.uniforms.uReveal.value = reduceMotion.matches ? routeLen : 0;
     route.visible = true;
-    const end = pts[pts.length - 1]; ring.position.set(end[0], 0.03, end[1]); ring.visible = true;
+    ring.position.set(t[0], 0.03, t[1]); ring.visible = true;
     needsRender = true;
-    return geo.userData.length;
+    return routeLen;
   }
   function clearRoute() { route.visible = false; ring.visible = false; needsRender = true; }
   function overRoute(sel) {
     const end = focusPoint(sel); if (!end) return;
-    const sx = SITE.gate.x, sz = SITE.gate.z, cx = (end.x + sx) / 2, cz = (end.z + sz) / 2, span = Math.hypot(end.x - sx, end.z - sz);
-    flyTo(new THREE.Vector3(cx + span * 0.3, 10 + span * (narrow() ? 1.3 : 0.8), cz + span * (narrow() ? 0.9 : 0.55)), new THREE.Vector3(cx, narrow() ? -span * 0.12 : 0, cz + (narrow() ? span * 0.2 : -2)), 1500);
+    const sx = LIFTS.x, sz = LIFTS.z, cx = (end.x + sx) / 2, cz = (end.z + sz) / 2, span = Math.hypot(end.x - sx, end.z - sz);
+    flyTo(new THREE.Vector3(cx + span * 0.15, 8 + span * (narrow() ? 1.3 : 0.8), cz + span * (narrow() ? 0.9 : 0.6) + 4), new THREE.Vector3(cx, narrow() ? -span * 0.15 : 0, cz + (narrow() ? span * 0.2 : 0)), 1500);
   }
 
   function drop(id, n, dir) {
-    const b = binById.get(id); const p = b ? new THREE.Vector3(b.x, b.y, b.z) : null; if (!p) return;
+    const b = binById.get(id); if (!b) return;
     n = Math.min(n, 8);
+    const fx = b.front[0], fz = b.front[1];
     for (let i = 0; i < n; i++) {
-      if (dir === "out") units.push({ p: new THREE.Vector3(p.x + (Math.random() - 0.5) * 0.4, p.y + 0.1, p.z + b.d / 2), v: new THREE.Vector3(Math.random() - 0.5, 1.4 + Math.random() * 0.8, 0.8 + Math.random() * 0.6), r: new THREE.Euler(), w: new THREE.Vector3(Math.random() * 8, Math.random() * 8, Math.random() * 8), age: -i * 0.07, life: 2.2, mode: "out" });
-      else units.push({ p: new THREE.Vector3(p.x + (Math.random() - 0.5) * 0.3, p.y + 1.6 + i * 0.15, p.z + 0.05), v: new THREE.Vector3(0, -0.5, 0), r: new THREE.Euler(), w: new THREE.Vector3(Math.random() * 3, Math.random() * 3, 0), age: -i * 0.09, life: 3, mode: "in", floor: b.y + b.h / 2 - 0.08 });
+      if (dir === "out") units.push({ p: new THREE.Vector3(b.x + fx * b.d / 2 + (Math.random() - 0.5) * 0.3 * fz, b.y + 0.1, b.z + fz * b.d / 2 + (Math.random() - 0.5) * 0.3 * fx), v: new THREE.Vector3(fx * (0.8 + Math.random() * 0.6) + (Math.random() - 0.5) * 0.6, 1.4 + Math.random() * 0.8, fz * (0.8 + Math.random() * 0.6) + (Math.random() - 0.5) * 0.6), r: new THREE.Euler(), w: new THREE.Vector3(Math.random() * 8, Math.random() * 8, Math.random() * 8), age: -i * 0.07, life: 2.2, mode: "out" });
+      else units.push({ p: new THREE.Vector3(b.x + (Math.random() - 0.5) * 0.2, b.y + 1.2 + i * 0.12, b.z), v: new THREE.Vector3(0, -0.5, 0), r: new THREE.Euler(), w: new THREE.Vector3(Math.random() * 3, Math.random() * 3, 0), age: -i * 0.09, life: 3, mode: "in", floor: b.y + b.h / 2 - 0.06 });
     }
     needsRender = true;
   }
@@ -708,16 +776,17 @@ export function createScene(canvas, hooks) {
   function setLabel(id, data) { const b = binById.get(id); if (b) { atlas.draw(b.label, { code: b.code, ...data }); needsRender = true; } }
   function project(sel) {
     const p = focusPoint(sel); if (!p) return null;
-    if (sel.type === "bin") p.y += binById.get(sel.id).h / 2 + 0.18;
+    if (sel.type === "bin") p.y += binById.get(sel.id).h / 2 + 0.14;
     else if (sel.type === "piece") p.y += 1.1 + (pieceAnim.get(sel.id)?.lift || 0);
-    else if (sel.type === "person") p.y += 0.6;
-    else if (sel.type === "building") p.y += 1.5 + byB.get(sel.id).open * 18;
+    else if (sel.type === "person") p.y += 0.7;
+    else if (sel.type === "building") p.y += 0.4;
+    else if (sel.type === "tower") p.y += FH + 0.2;
     p.project(camera);
     if (p.z > 1) return null;
     return { x: (p.x * 0.5 + 0.5) * canvas.clientWidth, y: (-p.y * 0.5 + 0.5) * canvas.clientHeight };
   }
 
-  // ---- loop ---------------------------------------------------------------------------
+  // ---- loop ---------------------------------------------------------------------------------
   function resize() {
     const w = canvas.clientWidth, h = canvas.clientHeight;
     renderer.setSize(w, h, false);
@@ -748,7 +817,7 @@ export function createScene(canvas, hooks) {
     }
     if (controls.update()) dirty = true;
     sky.position.copy(camera.position);
-    if (updateBuildings(dt)) dirty = true;
+    if (updateTower(dt)) dirty = true;
     if (updatePieces(dt)) dirty = true;
     if (pendingMove && !dragState) {
       const hit = pick(...pendingMove); pendingMove = null;
@@ -760,7 +829,7 @@ export function createScene(canvas, hooks) {
     }
     if (route.visible || outline.visible || ring.visible || units.length || (grid.visible && gridMat.uniforms.uT.value < 0.999)) dirty = true;
     routeMat.uniforms.uTime.value = t;
-    if (route.visible) routeMat.uniforms.uReveal.value = damp(routeMat.uniforms.uReveal.value, routeMat.uniforms.uLen.value + 1, 1.4, dt);
+    if (route.visible) routeMat.uniforms.uReveal.value = damp(routeMat.uniforms.uReveal.value, routeLen + 1, 1.4, dt);
     if (outline.visible) outline.material.opacity = 0.65 + Math.sin(t * 4) * 0.3;
     if (ring.visible) { const k = (t * 0.8) % 1; ring.scale.setScalar(0.8 + k * 1.4); ringMat.opacity = 0.7 * (1 - k); }
     if (grid.visible) gridMat.uniforms.uT.value = damp(gridMat.uniforms.uT.value, 1, 6, dt);
@@ -771,7 +840,7 @@ export function createScene(canvas, hooks) {
         if (u.age < 0) continue;
         u.v.y -= 9.8 * dt; u.p.addScaledVector(u.v, dt);
         u.r.x += u.w.x * dt; u.r.y += u.w.y * dt; u.r.z += u.w.z * dt;
-        const gy = u.mode === "in" ? u.floor : 0.05;
+        const gy = u.mode === "in" ? u.floor : 0.04;
         if (u.p.y < gy) { if (u.mode === "in") { u.age = u.life; continue; } u.p.y = gy; u.v.y = Math.abs(u.v.y) * 0.32; u.v.x *= 0.7; u.v.z *= 0.7; u.w.multiplyScalar(0.5); }
         const fade = u.mode === "out" ? Math.min(1, (u.life - u.age) * 2.5) : 1;
         dummy.position.copy(u.p); dummy.rotation.copy(u.r); dummy.scale.setScalar(fade); dummy.updateMatrix();
@@ -790,7 +859,10 @@ export function createScene(canvas, hooks) {
     else if (!document.hidden && !running) { running = true; needsRender = true; last = performance.now(); raf = requestAnimationFrame(frame); }
   });
 
-  // ---- public api ----------------------------------------------------------------------
+  const setTower = (target) => { tower.target = target; if (reduceMotion.matches) { tower.open = target; tower.vel = 0; } towerDirty = true; };
+  fitShadow(PCX, GROUND_Y + 8, PCZ, 48);
+
+  // ---- public api -----------------------------------------------------------------------------
   return {
     bins, binById, buildings: B, lowPower, gpuName,
     info: () => renderer.info.render,
@@ -805,42 +877,41 @@ export function createScene(canvas, hooks) {
     intro(on) {
       introOn = on;
       if (!on) return;
-      const [p, tg] = campusShot();
+      const [p, tg] = towerShot();
       if (reduceMotion.matches || lowPower) { camera.position.copy(p); controls.target.copy(tg); controls.update(); needsRender = true; return; }
-      camera.position.set(p.x - 40, p.y + 70, p.z + 50); controls.target.copy(tg);
+      camera.position.set(p.x + 30, p.y + 50, p.z + 40); controls.target.copy(tg);
       const f = flyTo(p, tg, 4600, 0); if (f) f.ease = (k) => 1 - Math.pow(1 - k, 3);
     },
-    assemble() { if (reduceMotion.matches || lowPower) return; for (const b of B) { b.assemble = 0; b.assembleT = 0; } buildingsDirty = true; },
-    peek(id) { for (const b of B) if (b.target < 0.5) b.target = b.id === id ? 0.12 : 0; buildingsDirty = true; },
-    campus(fly = true) {
-      for (const b of B) b.target = 0;
-      if (reduceMotion.matches) for (const b of B) { b.open = 0; b.vel = 0; }
-      buildingsDirty = true; fitShadow(-2, -6, 58);
-      if (fly) { const [p, tg] = campusShot(); flyTo(p, tg, 1900); }
-    },
-    enter(buildingId, fly = true) {
-      const b = byB.get(buildingId);
-      for (const x of B) x.target = x.id === buildingId ? 1 : 0;
-      if (reduceMotion.matches) for (const x of B) { x.open = x.target; x.vel = 0; }
-      buildingsDirty = true;
-      fitShadow(b.x, b.z, Math.max(b.w, b.d) * 0.75 + 4);
-      if (fly) { const [p, tg] = deptShot(buildingId); flyTo(p, tg, 2000); }
+    assemble() { if (reduceMotion.matches || lowPower) return; tower.assemble = 0; tower.assembleT = 0; towerDirty = true; },
+    peek() {},
+    // outside the block
+    campus(fly = true) { focusZone = null; setTower(0); repaint(); fitShadow(PCX, GROUND_Y + 8, PCZ, 48); if (fly) { const [p, tg] = towerShot(); flyTo(p, tg, 2000); } },
+    // inside, the whole of Verlet's floor
+    floor(fly = true) { focusZone = null; setTower(1); repaint(); fitShadow(0, 0, 0, 26); if (fly) { const [p, tg] = floorShot(); flyTo(p, tg, 2200); } },
+    // inside, one department's zone
+    enter(id, fly = true) {
+      const b = byB.get(id); if (!b) return;
+      const wasIn = tower.target > 0.5;
+      setTower(1); focusZone = id; repaint();
+      fitShadow(b.x, 0, b.z, Math.max(b.w, b.d) * 0.8 + 4);
+      setTimeout(() => raiseCurtain(b, accents[id] || "#ff5c95"), wasIn ? 250 : 1200);
+      if (fly) { const [p, tg] = zoneShot(id); flyTo(p, tg, wasIn ? 1700 : 2600); }
     },
     flyTo, overRoute, focus, select, showRoute, clearRoute, drop, setLabel, setBinVisible, project,
-    setHeat(map) { heat = map; toteMat.color.set(map ? "#d8d8d8" : "#2a6db5"); repaint(); },
+    setHeat(map) { heat = map; repaint(); },
     setEdit(opts) {
       edit = opts;
-      if (opts) { const b = byB.get(deptOf.get(opts.deptId).building); grid.scale.set(b.w - 0.4, b.d - 0.4, 1); grid.position.set(b.x, 0.025, b.z); gridMat.uniforms.uSize.value.set(b.w - 0.4, b.d - 0.4); gridMat.uniforms.uT.value = 0; grid.visible = true; }
+      if (opts) { const b = byB.get(deptOf.get(opts.deptId).building); grid.scale.set(b.w, b.d, 1); grid.position.set(b.x, 0.02, b.z); gridMat.uniforms.uSize.value.set(b.w, b.d); gridMat.uniforms.uT.value = 0; grid.visible = true; }
       else { grid.visible = false; dragState = null; controls.enabled = true; }
       needsRender = true;
     },
     validPlacement, freeSpot, selectPiece,
-    dropIn(id) { const a = anim(id); a.lift = 3.2; a.vy = 0; a.drop = true; a.liftTo = 0; a.scale = 0.5; a.scaleTo = 1; needsRender = true; },
+    dropIn(id) { const a = anim(id); a.lift = 3.0; a.vy = 0; a.drop = true; a.liftTo = 0; a.scale = 0.5; a.scaleTo = 1; needsRender = true; },
     shrinkOut(id, done) { const a = anim(id); a.scaleTo = 0; a.done = done; needsRender = true; },
   };
 }
 
-// ---- geometry helpers -------------------------------------------------------------
+// ---- geometry helpers -------------------------------------------------------------------
 function colored(g, color) {
   g = g.index ? g.toNonIndexed() : g;
   const c = new THREE.Color(color), n = g.attributes.position.count, a = new Float32Array(n * 3);
@@ -871,11 +942,10 @@ function carGeometry() {
   for (const [x, z] of [[-0.85, 1.35], [0.85, 1.35], [-0.85, -1.35], [0.85, -1.35]]) { const g = new THREE.CylinderGeometry(0.33, 0.33, 0.24, 14); g.rotateZ(Math.PI / 2); g.translate(x, 0.33, z); parts.push(colored(g, "#141414")); }
   return mergeAll(parts);
 }
-function toteGeometry() {
+function trayGeometry() {
+  // open-top parts tray, origin at the bottom
   const g = new THREE.BoxGeometry(1, 1, 1, 1, 1, 1);
   g.translate(0, 0.5, 0);
-  const pos = g.attributes.position;
-  for (let i = 0; i < pos.count; i++) if (pos.getY(i) < 0.01) { pos.setX(i, pos.getX(i) * 0.95); pos.setZ(i, pos.getZ(i) * 0.95); }
   const idx = g.index.array, top = g.groups[2];
   for (let k = top.start; k < top.start + top.count; k++) idx[k] = idx[top.start];
   g.computeVertexNormals();
@@ -905,11 +975,4 @@ function ribbon(pts, width) {
   g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2)); g.setIndex(idx);
   g.userData.length = len;
   return g;
-}
-function radialTexture() {
-  const c = document.createElement("canvas"); c.width = c.height = 128;
-  const g = c.getContext("2d"), grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-  grd.addColorStop(0, "rgba(255,255,255,1)"); grd.addColorStop(0.45, "rgba(255,255,255,.35)"); grd.addColorStop(1, "rgba(255,255,255,0)");
-  g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
-  return new THREE.CanvasTexture(c);
 }

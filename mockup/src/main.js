@@ -1,6 +1,6 @@
 import * as D from "./data.js";
 import { store, fmt, ago, RuleError, KIT } from "./data.js";
-import { PLACEHOLDER } from "./site.js";
+import { PLACEHOLDER, TOWER } from "./site.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -9,7 +9,7 @@ const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
 const ACCENTS = ["#ff5c95", "#7cb7ff", "#e6b44a", "#5fbf7f", "#c79bff", "#ff8a5c", "#59d0c8"];
 
 const CHAPTERS = [
-  { key: "campus", name: "Campus" },
+  { key: "campus", name: "Floor" },
   { key: "find", name: "Find" },
   { key: "ledger", name: "Ledger" },
   { key: "pay", name: "Expenses" },
@@ -18,7 +18,8 @@ const CHAPTERS = [
 
 const ui = {
   chapter: "campus",
-  dept: null,          // department entered
+  inside: false,       // inside the block, on Verlet's floor
+  dept: null,          // department zone entered
   sel: null,           // { type: bin|piece|person|location, id }
   focusLoc: null,
   activeItem: null,    // { item, loc }
@@ -32,6 +33,22 @@ const ui = {
 let scene = null;
 const noop = () => {};
 const stub = new Proxy({ bins: [], binById: new Map(), buildings: [] }, { get: (t, k) => (k in t ? t[k] : k === "project" || k === "freeSpot" ? () => null : k === "validPlacement" ? () => true : noop) });
+// software GL (SwiftShader, llvmpipe): the intro shows a still and the 3D starts on sign-in
+function softwareGL() {
+  try {
+    const c = document.createElement("canvas"), gl = c.getContext("webgl2") || c.getContext("webgl");
+    if (!gl) return null;
+    const d = gl.getExtension("WEBGL_debug_renderer_info");
+    const name = d ? String(gl.getParameter(d.UNMASKED_RENDERER_WEBGL)) : "";
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
+    return /swiftshader|llvmpipe|softpipe|software|basic render/i.test(name);
+  } catch { return null; }
+}
+let booting = null;
+function ensureScene() {
+  if (!booting) booting = boot().then(() => { $("#fallback").hidden = scene !== stub; syncScene(); buildTags(); refreshLabels(); });
+  return booting;
+}
 async function boot() {
   const probe = document.createElement("canvas");
   if (!(probe.getContext("webgl2") || probe.getContext("webgl"))) return fallback();
@@ -81,7 +98,7 @@ function setChapterMeter() {
   const idx = CHAPTERS.findIndex((c) => c.key === ui.chapter);
   $("#chapterNo").textContent = String(idx + 1).padStart(2, "0");
   const d = ui.dept && D.dept(ui.dept);
-  $("#chapterName").textContent = ui.chapter === "campus" && d ? `Campus › ${d.name}` : CHAPTERS[idx].name;
+  $("#chapterName").textContent = ui.chapter === "campus" ? (d ? `Floor › ${d.name}` : ui.inside ? "Floor" : "Building") : CHAPTERS[idx].name;
   $("#chapterFill").style.transform = `scaleX(${(idx + 1) / CHAPTERS.length})`;
   for (const b of $$(".chapters button")) b.dataset.ch === ui.chapter ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current");
 }
@@ -91,15 +108,16 @@ function go(chapter, { camera = true } = {}) {
   if (chapter !== "find") { ui.sel = null; scene.select(null); scene.clearRoute(); }
   scene.setHeat(chapter === "condition" ? heatMap() : null);
   if (camera) {
+    ui.inside = true;
     if (chapter === "pay") { ui.dept = "soft"; scene.enter(D.dept("soft").building); }
-    else if (chapter === "condition") { ui.dept = "stock"; scene.enter(D.dept("stock").building); }
-    else if (chapter !== "find") ui.dept ? scene.enter(D.dept(ui.dept).building) : scene.campus();
+    else if (chapter === "condition") { ui.dept = null; scene.floor(); }
+    else if (chapter !== "find") ui.dept ? scene.enter(D.dept(ui.dept).building) : scene.floor();
   }
   setHash(); render();
 }
 function setHash() {
   let h = `#${ui.chapter}`;
-  if (ui.chapter === "campus" && ui.dept) h = `#dept/${ui.dept}`;
+  if (ui.chapter === "campus") h = ui.dept ? `#dept/${ui.dept}` : ui.inside ? "#floor" : "#outside";
   if (ui.chapter === "find" && ui.sel) h = `#find/${ui.sel.type}/${ui.sel.id}`;
   if (location.hash !== h) history.replaceState(null, "", h);
 }
@@ -109,16 +127,21 @@ function enterDept(id, { fly = true, quiet = false } = {}) {
   const d = D.dept(id); if (!d) return;
   if (ui.edit) exitEdit();
   const changed = ui.dept !== id;
-  ui.dept = id; ui.sel = null; scene.select(null); scene.clearRoute();
+  ui.dept = id; ui.inside = true; ui.sel = null; scene.select(null); scene.clearRoute();
   scene.enter(d.building, fly);
   if (changed && !quiet) titleCard(d);
   ui.chapter = "campus";
   scene.setHeat(null);
   setHash(); render();
 }
-function toCampus() {
+function toCampus() {   // back to the whole floor
   if (ui.edit) exitEdit();
-  ui.dept = null; ui.sel = null; scene.select(null); scene.clearRoute(); scene.setHeat(null); scene.campus();
+  ui.dept = null; ui.inside = true; ui.sel = null; scene.select(null); scene.clearRoute(); scene.setHeat(null); scene.floor();
+  ui.chapter = "campus"; setHash(); render();
+}
+function toOutside() {
+  if (ui.edit) exitEdit();
+  ui.dept = null; ui.inside = false; ui.sel = null; scene.select(null); scene.clearRoute(); scene.setHeat(null); scene.campus();
   ui.chapter = "campus"; setHash(); render();
 }
 // the department's name sweeps across as the roof comes off
@@ -146,7 +169,7 @@ function open(sel, { route = false, itemId = null, fly = true } = {}) {
     else { const pc = D.pieceOfLocation(sel.id); if (pc) { ui.focusLoc = sel.id; sel = { type: "piece", id: pc.id }; } else return toast("That location isn't on the map yet.", true); }
   }
   const deptId = sel.type === "bin" ? "stock" : sel.type === "piece" ? store.get().pieces.find((p) => p.id === sel.id)?.dept : sel.type === "person" ? D.person(sel.id)?.dept : null;
-  if (deptId && deptId !== ui.dept) { ui.dept = deptId; scene.enter(D.dept(deptId).building, false); titleCard(D.dept(deptId)); }
+  if (deptId && deptId !== ui.dept) { ui.dept = deptId; ui.inside = true; scene.enter(D.dept(deptId).building, false); titleCard(D.dept(deptId)); }
   ui.sel = sel;
   const loc = selectionLocation(sel);
   const rows = loc ? D.stockUnder(ui.focusLoc || loc) : [];
@@ -178,6 +201,7 @@ function onPick(hit) {
     if (hit.type === "piece" && store.get().pieces.find((p) => p.id === hit.id)?.dept === ui.dept) { ui.editPiece = hit.id; scene.selectPiece(hit.id); render(); }
     return;
   }
+  if (hit.type === "tower") return toCampus();
   if (hit.type === "building") {
     const d = store.get().departments.find((x) => x.building === hit.id);
     if (d && d.id !== ui.dept) enterDept(d.id);
@@ -198,22 +222,23 @@ function render() {
   const body = $("#panelBody");
   let html;
   if (ui.edit) html = editPanel();
-  else if (ui.chapter === "campus") html = ui.sel ? selectionPanel() : ui.dept ? deptPanel() : campusPanel();
+  else if (ui.chapter === "campus") html = ui.sel ? selectionPanel() : ui.dept ? deptPanel() : ui.inside ? campusPanel() : outsidePanel();
   else html = { find: findPanel, ledger: ledgerPanel, pay: payPanel, condition: conditionPanel }[ui.chapter]();
   body.innerHTML = html;
   bindPanel(body);
   tickNumbers(body);
-  $("#bldgTags").classList.toggle("hide", !!ui.dept || ui.chapter !== "campus");
+  $("#bldgTags").classList.toggle("hide", !!ui.dept || ui.chapter !== "campus" || !!ui.sel);
+  $("#bldgTags").classList.toggle("outside", !ui.inside);
 }
 
 function campusPanel() {
   const s = store.get(), m = me(), admin = D.canEditCampus(m);
   const deps = s.departments.map((d) => ({ d, st: D.deptStats(d), b: D.building(d.building) }));
   return `
-    <p class="kicker">01 · Campus</p>
+    <p class="kicker">01 · Floor ${TOWER.verletFloor} · Verlet's part</p>
     <h2>Verlet Robotics</h2>
-    <p>${deps.length} departments, ${s.people.length} people, ${fmt(deps.reduce((a, x) => a + x.st.units, 0))} units on shelves. Open a building to step inside.</p>
-    ${PLACEHOLDER ? `<p class="note"><b>Placeholder massing.</b> Building shapes and positions will be matched to site photos.</p>` : ""}
+    <p>${deps.length} departments, ${s.people.length} people, ${fmt(deps.reduce((a, x) => a + x.st.units, 0))} units on shelves. Pick a zone to walk into it.</p>
+    <p class="note"><b>Measured from the walk-through video.</b> Column grid, walls, glazing, shelving and zones are estimated from tile and column counts. ${PLACEHOLDER ? "The outside of the block is a stand-in." : ""} Fix anything off with Edit layout.</p>
     <ul class="dept-list">${deps.map(({ d, st, b }) => `
       <li><button class="dept-card" data-enter="${d.id}" style="--acc:${d.accent}">
         <span class="dc-top"><i></i><b>${esc(d.name)}</b>${d.id === m?.dept ? `<span class="tag hl">yours</span>` : ""}</span>
@@ -221,6 +246,15 @@ function campusPanel() {
         <span class="dc-stats"><span><b>${fmt(st.units)}</b> units</span><span><b>${st.low}</b> low</span><span><b>${st.damaged}</b> damaged</span></span>
       </button></li>`).join("")}</ul>
     ${admin ? peopleAdmin() : `<p class="small">Departments and who belongs where are set by the admin.</p>`}`;
+}
+function outsidePanel() {
+  const s = store.get();
+  return `
+    <p class="kicker">01 · Building</p>
+    <h2>${esc(TOWER.name)}</h2>
+    <p>Verlet Robotics has part of floor ${TOWER.verletFloor} of ${TOWER.floors} — the pink band on the facade. ${s.people.length} people, ${s.departments.length} departments.</p>
+    ${PLACEHOLDER ? `<p class="note"><b>Stand-in exterior.</b> Only Verlet's floor is modelled from the video; the outside of the block is context.</p>` : ""}
+    <div class="btn-row"><button class="btn primary" data-campus>Go up to Verlet</button></div>`;
 }
 function peopleAdmin() {
   const s = store.get();
@@ -240,7 +274,7 @@ function deptPanel() {
   const people = D.peopleIn(d.id);
   const holders = store.get().pieces.filter((p) => p.dept === d.id && p.location);
   return `
-    <p class="kicker" style="color:${d.accent}">Department · ${esc(b?.name || "")}</p>
+    <p class="kicker" style="color:${d.accent}">Zone · ${esc(b?.name || "")}</p>
     ${canEdit ? `<label class="title-edit"><span class="sr">Department name</span><input id="deptName" value="${esc(d.name)}" maxlength="40" /></label>` : `<h2>${esc(d.name)}</h2>`}
     <p>${d.lead ? `Led by ${esc(D.personName(d.lead))}. ` : ""}${people.length ? `${people.length} ${people.length === 1 ? "person works" : "people work"} here.` : "Nobody is assigned here yet."}</p>
     ${admin ? `<div class="swatches" role="group" aria-label="Department colour">${ACCENTS.map((c) => `<button class="sw" data-accent="${c}" style="--c:${c}" aria-label="Colour ${c}" aria-pressed="${c === d.accent}"></button>`).join("")}</div>` : ""}
@@ -250,7 +284,7 @@ function deptPanel() {
     </div>
     <div class="btn-row">
       ${canEdit ? `<button class="btn primary" data-edit>Edit layout</button>` : myDesk && myDesk.dept === d.id ? `<button class="btn primary" data-edit>Move my desk</button>` : ""}
-      <button class="btn" data-campus>Back to campus</button>
+      <button class="btn" data-campus>Whole floor</button>
     </div>
     <h3>People</h3>
     ${people.length ? `<ul class="rows">${people.map((p) => { const desk = D.deskOf(p.id); return `<li><button class="rowbtn" data-person="${p.id}"><span class="av" style="--c:${avatarColor(p.id)}">${esc(initials(p.name))}</span><span class="grow"><span class="t">${esc(p.name)}${p.id === m?.id ? " (you)" : ""}</span><span class="s">${D.roleLabel(p.role)}${d.lead === p.id ? " · lead" : ""} · ${desk && desk.dept === d.id ? "own desk" : "no desk yet"}</span></span></button></li>`; }).join("")}</ul>` : `<div class="empty"><b>No one here yet.</b><span>The admin assigns people from the campus view.</span></div>`}
@@ -283,7 +317,7 @@ function personPanel(id) {
     <h3>Holding</h3>
     ${held.length ? `<ul class="rows">${held.map(({ s, n }) => `<li><button class="rowbtn" data-open-loc="${s.location_id}" data-item="${s.item_id}"><span class="grow"><span class="t">${esc(D.item(s.item_id).name)}</span><span class="s">${esc(D.path(s.location_id))}</span></span><span class="num">${n}</span></button></li>`).join("")}</ul>` : `<div class="empty"><b>Nothing checked out.</b></div>`}
     ${D.canEditCampus(m) ? `<h3>Department</h3><select class="mini wide" data-assign="${id}" aria-label="Department for ${esc(p.name)}"><option value="">No department</option>${store.get().departments.map((x) => `<option value="${x.id}" ${p.dept === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : ""}
-    <div class="btn-row"><button class="btn small" data-route-here>Route from the gate</button><button class="btn small" data-close>Close</button></div>`;
+    <div class="btn-row"><button class="btn small" data-route-here>Route from the lifts</button><button class="btn small" data-close>Close</button></div>`;
 }
 
 function inspector(locId) {
@@ -324,7 +358,7 @@ function inspector(locId) {
     <h2>${rows.length ? esc(D.item(rows[0].item_id).name) + (rows.length > 1 ? ` <em>+${rows.length - 1}</em>` : "") : esc(l.name)}</h2>
     <div class="crumbs">${esc(D.path(l.id))}${l.sample ? " · sample shelving" : ""}</div>
     ${rows.length ? items + form : `<div class="empty"><b>Nothing stocked here.</b><span>${l.label ? esc(l.label) + ". " : ""}An inventory manager can add stock to this location.</span></div>`}
-    <div class="btn-row"><button class="btn small" data-route-here>Route from the gate</button><button class="btn small" data-close>Close</button></div>`;
+    <div class="btn-row"><button class="btn small" data-route-here>Route from the lifts</button><button class="btn small" data-close>Close</button></div>`;
 }
 
 function findPanel() {
@@ -333,7 +367,7 @@ function findPanel() {
   return `
     <p class="kicker">02 · Find</p>
     <h2>What are you looking for?</h2>
-    <p>Items, people, departments or box codes. The site draws the route from the gate to the shelf, in whichever building it is.</p>
+    <p>Items, people, departments or box codes. The floor draws the route from the lifts to the shelf, in whichever zone it is.</p>
     <div class="btn-row"><button class="btn primary" data-search>Search everything <kbd>/</kbd></button></div>
     <h3>Catalogue</h3>
     <ul class="rows">${[...s.items].sort((a, b) => a.sample - b.sample).map((it) => { const st = D.stockOf(it.id); const n = st.reduce((a, x) => a + x.quantity, 0); const where = [...new Set(st.map((x) => D.deptOfLocation(x.location_id)?.name).filter(Boolean))]; return `<li><button class="rowbtn" data-find="${it.id}" ${st.length ? "" : "disabled"}><span class="grow"><span class="t">${esc(it.type)} · ${esc(it.name)}${it.sample ? ' <span class="tag">sample</span>' : ""}</span><span class="s">${it.sku} · ${esc(where.join(", ") || "not stocked")}</span></span><span class="num">${n}</span></button></li>`; }).join("")}</ul>`;
@@ -594,7 +628,10 @@ function hoverTip(hit) {
   if (!ui.dept) scene.peek(hit?.type === "building" ? hit.id : null);
   if (!hit || (ui.sel && hit.type === ui.sel.type && hit.id === ui.sel.id)) { tip.hidden = true; return; }
   let html = "";
-  if (hit.type === "building") {
+  if (hit.type === "tower") return toCampus();
+  if (hit.type === "tower") {
+    html = `<b>Verlet Robotics</b>Floor ${TOWER.verletFloor} of ${TOWER.floors} · part of the floor<br><span class="dim">Click to go up</span>`;
+  } else if (hit.type === "building") {
     const d = store.get().departments.find((x) => x.building === hit.id), b = D.building(hit.id);
     if (d && d.id === ui.dept) { tip.hidden = true; return; }
     html = d ? `<b style="color:${d.accent}">${esc(d.name)}</b>${esc(b.name)} · ${D.peopleIn(d.id).length} people · ${fmt(D.deptStats(d).units)} units<br><span class="dim">Click to open</span>` : `<b>${esc(b.name)}</b>`;
@@ -617,14 +654,14 @@ function placeOverlays() {
     if (p) { pin.hidden = false; pin.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -100%)`; } else pin.hidden = true;
   } else pin.hidden = true;
   if (!ui.dept && ui.chapter === "campus") for (const el of $$("#bldgTags .bt")) {
-    const p = scene.project({ type: "building", id: el.dataset.b });
+    const p = scene.project(el.dataset.b === "tower" ? { type: "tower" } : { type: "building", id: el.dataset.b });
     if (p) { el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -100%)`; el.hidden = false; } else el.hidden = true;
   }
 }
 function buildTags() {
-  $("#bldgTags").innerHTML = store.get().departments.map((d) => `<button class="bt" data-b="${d.building}" data-enter-tag="${d.id}" style="--acc:${d.accent}" tabindex="-1"><i></i><b>${esc(d.name)}</b><span>${D.peopleIn(d.id).length}</span></button>`).join("");
+  $("#bldgTags").innerHTML = `<button class="bt bt-tower" data-b="tower" data-enter-tag="tower" style="--acc:#ff5c95" tabindex="-1"><i></i><b>Verlet Robotics</b><span>floor ${TOWER.verletFloor}</span></button>` + store.get().departments.map((d) => `<button class="bt" data-b="${d.building}" data-enter-tag="${d.id}" style="--acc:${d.accent}" tabindex="-1"><i></i><b>${esc(d.name)}</b><span>${D.peopleIn(d.id).length}</span></button>`).join("");
 }
-$("#bldgTags").addEventListener("click", (e) => { const b = e.target.closest("[data-enter-tag]"); if (b) enterDept(b.dataset.enterTag); });
+$("#bldgTags").addEventListener("click", (e) => { const b = e.target.closest("[data-enter-tag]"); if (!b) return; if (b.dataset.enterTag === "tower") toCampus(); else enterDept(b.dataset.enterTag); });
 
 // ---- search -------------------------------------------------------------------------------
 const dlg = $("#search"), q = $("#q"), results = $("#results");
@@ -683,7 +720,7 @@ addEventListener("keydown", (e) => {
   }
   if (e.key === "/" || (e.key.toLowerCase() === "k" && (e.metaKey || e.ctrlKey))) { e.preventDefault(); openSearch(); }
   else if (/^[1-5]$/.test(e.key)) go(CHAPTERS[Number(e.key) - 1].key);
-  else if (e.key === "Escape") { if (ui.sel) clearSelection(); else if (ui.dept) toCampus(); }
+  else if (e.key === "Escape") { if (ui.sel) clearSelection(); else if (ui.dept) toCampus(); else if (ui.inside) toOutside(); }
 });
 
 // ---- toasts + numbers ----------------------------------------------------------------
@@ -727,7 +764,8 @@ function buildSignIn() {
     card.onpointerleave = () => { card.style.setProperty("--rx", "0deg"); card.style.setProperty("--ry", "0deg"); };
   }
 }
-function signIn(id) {
+async function signIn(id) {
+  if (!booting) { $("#intro").classList.add("gone"); await ensureScene(); }
   store.signIn(id);
   const p = me();
   $("#roleLabel").textContent = p.name.split(" ")[0];
@@ -739,18 +777,19 @@ function signIn(id) {
   if (h[0] === "dept" && D.dept(h[1])) return enterDept(h[1]);
   if (h[0] === "find" && h[1] && h[2]) { ui.chapter = "find"; return open({ type: h[1], id: h.slice(2).join("/") }); }
   if (["ledger", "pay", "condition"].includes(h[0])) return go(h[0]);
-  if (h[0] === "campus") return toCampus();
-  // home: fly into your own department
-  if (p.dept) return enterDept(p.dept);
+  if (h[0] === "floor") return toCampus();
+  if (h[0] === "outside") return toOutside();
+  // home: the floors above lift, then you land in your own zone
   toCampus();
+  if (p.dept) { clearTimeout(signIn.t); signIn.t = setTimeout(() => { if (!ui.dept && !ui.sel) enterDept(p.dept); }, reduceMotion.matches ? 0 : 2300); }
 }
 $("#roleChip").onclick = () => {
   if (ui.edit) exitEdit();
   buildSignIn();
   document.body.classList.add("pre");
   $("#intro").classList.remove("gone");
-  ui.dept = null; ui.sel = null; scene.select(null); scene.clearRoute(); scene.campus(false); scene.intro(true);
-  history.replaceState(null, "", "#campus");
+  ui.dept = null; ui.inside = false; ui.sel = null; scene.select(null); scene.clearRoute(); scene.campus(false); scene.intro(true);
+  history.replaceState(null, "", "#outside");
   $(".role-card")?.focus();
 };
 $("#resetData").onclick = () => { if (ui.edit) exitEdit(); store.reset(); ui.sel = null; scene.select(null); scene.clearRoute(); toast("Mock data reset to the app's fixtures"); };
@@ -791,15 +830,22 @@ addEventListener("hashchange", () => {
   if (!me()) return;
   const h = location.hash.slice(1).split("/");
   if (h[0] === "dept" && D.dept(h[1]) && h[1] !== ui.dept) enterDept(h[1]);
-  else if (h[0] === "campus" && (ui.dept || ui.chapter !== "campus")) toCampus();
+  else if (h[0] === "floor" && (ui.dept || !ui.inside || ui.chapter !== "campus")) toCampus();
+  else if (h[0] === "outside" && ui.inside) toOutside();
   else if (["ledger", "pay", "condition", "find"].includes(h[0]) && h.length === 1 && h[0] !== ui.chapter) go(h[0]);
 });
 
 // ---- start ----------------------------------------------------------------------------------
+scene = stub;
 document.body.classList.add("pre");
 buildSignIn();
 await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
-await boot();
-syncScene(); buildTags(); refreshLabels();
-if (me()) signIn(me().id);
-else { scene.assemble(); scene.intro(true); }
+const soft = softwareGL();
+if (soft && !me()) {
+  // a still of the building behind the intro; the 3D boots when someone signs in
+  $("#fallback").hidden = false;
+} else {
+  await ensureScene();
+  if (me()) signIn(me().id);
+  else { scene.assemble(); scene.intro(true); }
+}

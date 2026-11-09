@@ -10,7 +10,7 @@
 import * as F from "./fixtures.js";
 import { BUILDINGS } from "./site.js";
 
-const STORE_KEY = "verlet-campus-v3";
+const STORE_KEY = "verlet-floor-v5";
 
 // ---- SKU rule from docs/SPEC.md §1 ------------------------------------------
 export function skuPrefix(type) {
@@ -98,16 +98,21 @@ const HOME = {
 export const KIT = {
   workstation: { label: "Desk", w: 1.6, d: 1.5, types: "*" },
   bench: { label: "Workbench", w: 2.0, d: 1.0, types: ["lab", "robotics", "field", "stockroom"] },
-  printer: { label: "3D printer", w: 0.7, d: 0.7, types: ["lab", "robotics"] },
+  printer: { label: "3D printer", w: 0.8, d: 0.7, types: ["lab", "robotics"] },
   shelf: { label: "Shelving", w: 1.3, d: 0.6, types: "*" },
-  heavyRack: { label: "Heavy rack", w: 2.6, d: 1.1, types: ["stockroom", "field"] },
-  robotCell: { label: "Robot cell", w: 1.8, d: 1.4, types: ["robotics", "lab"] },
+  heavyRack: { label: "Wide shelving", w: 2.6, d: 1.1, types: ["stockroom", "field"] },
+  robotCell: { label: "Robot desk", w: 1.8, d: 1.4, types: ["robotics", "lab"] },
   amr: { label: "Mobile robot", w: 0.8, d: 0.6, types: ["robotics"] },
   server: { label: "Server rack", w: 0.7, d: 1.1, types: ["office", "robotics", "lab"] },
   meeting: { label: "Meeting table", w: 2.8, d: 1.8, types: ["office", "lab", "robotics"] },
   sofa: { label: "Sofa", w: 2.0, d: 0.9, types: ["office"] },
   board: { label: "Whiteboard", w: 1.9, d: 0.5, types: "*" },
+  tv: { label: "TV stand", w: 1.3, d: 0.6, types: "*" },
   plant: { label: "Plant", w: 0.6, d: 0.6, types: "*" },
+  fan: { label: "Standing fan", w: 0.5, d: 0.5, types: "*" },
+  bin: { label: "Wheelie bin", w: 0.6, d: 0.65, types: "*" },
+  ladder: { label: "Step ladder", w: 0.6, d: 1.0, types: ["field", "stockroom", "lab"] },
+  plywood: { label: "Plywood sheets", w: 2.6, d: 0.5, types: ["field", "stockroom", "lab"] },
   frontDesk: { label: "Front desk", w: 2.6, d: 1.2, types: ["office"] },
   cases: { label: "Flight cases", w: 1.4, d: 0.9, types: ["field", "robotics", "stockroom"] },
   pallet: { label: "Pallet", w: 1.3, d: 1.1, types: ["stockroom", "field"] },
@@ -118,45 +123,43 @@ export const kitFor = (type) => Object.entries(KIT).filter(([, k]) => k.types ==
 function defaultPieces() {
   const P = [];
   const add = (dept, kind, x, z, rot = 0, extra = {}) => P.push({ id: `pc-${P.length + 1}`, dept, kind, x, z, rot, ...extra });
-  // Software (office, 18 × 13)
-  add("soft", "frontDesk", -5.6, 4.5, 0, { location: LOC["Front desk"] });
-  [-6.4, -4.6, -2.8, -1.0].forEach((x, i) => add("soft", "workstation", x, -4.3, 0, i === 0 ? { owner: PERSON["Verlet Admin"] } : i === 1 ? { owner: PERSON["Diane Mukamana"] } : {}));
-  [-6.4, -4.6, -2.8, -1.0].forEach((x) => add("soft", "workstation", x, -0.9, 0));
-  add("soft", "meeting", 4.9, -3.6);
-  add("soft", "board", 4.9, -5.9);
-  add("soft", "sofa", 5.2, 2.2, Math.PI);
-  add("soft", "server", 8.1, 4.9, -Math.PI / 2);
-  add("soft", "plant", -8.2, -5.8); add("soft", "plant", 8.2, -5.8); add("soft", "plant", 2.4, 5.6);
-  // Hardware (lab, 15 × 12)
-  [-5.2, -2.9, -0.6].forEach((x) => add("hard", "bench", x, -5.1));
-  add("hard", "printer", 2.0, -5.3); add("hard", "printer", 2.9, -5.3);
-  add("hard", "shelf", 6.3, -5.4, 0, { location: LOC["Lab A"] });
-  add("hard", "bench", -1.1, -1.2, 0); add("hard", "bench", 1.1, -1.2, Math.PI);
-  add("hard", "workstation", 4.6, 1.6, 0, { owner: PERSON["Eric Mugisha"] });
-  add("hard", "robotCell", -4.8, 2.4);
-  add("hard", "plant", -6.8, 5.2); add("hard", "plant", 6.8, 5.2);
-  // Robotics station (hall, 20 × 14)
-  add("robo", "shelf", -8.7, -6.4, 0, { location: LOC["Shelf A"] });
-  add("robo", "shelf", -7.1, -6.4, 0, { location: LOC["Shelf B"] });
-  [-3.2, 0.4, 4.0].forEach((x) => add("robo", "robotCell", x, -4.9));
-  add("robo", "amr", 1.4, 0.6, 0.6); add("robo", "amr", 4.2, 1.8, -0.4);
-  add("robo", "bench", 7.8, -6.0);
-  add("robo", "server", 9.2, -2.4, -Math.PI / 2);
-  add("robo", "workstation", -6.0, 2.8, 0, { owner: PERSON["Grace Ingabire"] });
-  add("robo", "workstation", -4.2, 2.8, 0, { owner: PERSON["Jean Habimana"] });
-  add("robo", "board", -8.8, 1.0, Math.PI / 2);
-  add("robo", "cases", 7.6, 4.6);
-  add("robo", "plant", 9.0, 6.0);
-  // Field Kit bay (11 × 9)
-  add("field", "cases", -3.0, -3.2, 0, { location: LOC["Field Kit"] });
-  add("field", "pallet", -0.6, -3.3);
-  add("field", "shelf", 3.8, -3.6);
-  add("field", "bench", 2.6, 0.6);
-  // Stockroom extras (racks themselves come from the location tree)
-  add("stock", "heavyRack", 8.4, -6.9, 0, { location: LOC["Rack 1"] });
-  add("stock", "pallet", 8.0, -3.0); add("stock", "pallet", 9.6, -3.0);
-  add("stock", "workstation", 8.6, 2.6, 0, { owner: PERSON["Aline Uwase"] });
-  add("stock", "plant", 11.0, 7.0);
+  const R = Math.PI;
+  // Dev rows (26 × 12): two rows of white-top desks facing the windows, red banquet chairs
+  const xs = [-11.2, -9.5, -5.2, -3.5, 1.0, 2.7, 7.0, 8.7];
+  xs.forEach((x, i) => add("soft", "workstation", x, -3.4, R, i === 0 ? { owner: PERSON["Verlet Admin"] } : i === 1 ? { owner: PERSON["Diane Mukamana"] } : {}));
+  xs.forEach((x) => add("soft", "workstation", x, 3.2, R));
+  add("soft", "frontDesk", 11.2, -3.8, R, { location: LOC["Front desk"] });
+  add("soft", "meeting", 11.4, 3.7);
+  add("soft", "tv", -12.2, 0.2, Math.PI / 2);
+  add("soft", "bin", -0.4, 0.9); add("soft", "fan", 4.0, 0.8); add("soft", "plant", 12.4, -0.6);
+  // Robotics desks (12 × 8): SO-100 arm desks, Shelf A/B, mobile robots
+  add("robo", "shelf", -5.0, -3.45, 0, { location: LOC["Shelf A"] });
+  add("robo", "shelf", -3.6, -3.45, 0, { location: LOC["Shelf B"] });
+  [-0.8, 2.4, 4.9].forEach((x) => add("robo", "robotCell", x, -2.8));
+  add("robo", "amr", 0.5, 1.2, 0.5); add("robo", "amr", 2.6, 3.0, -0.4);
+  add("robo", "workstation", -4.6, 1.8, 0, { owner: PERSON["Grace Ingabire"] });
+  add("robo", "workstation", 0.8, 2.6, 0, { owner: PERSON["Jean Habimana"] });
+  add("robo", "server", 5.2, 3.0, -Math.PI / 2);
+  add("robo", "board", -5.6, -0.5, Math.PI / 2);
+  // Electronics & printing (10 × 10): printer row on pine tables, benches, Lab A shelving
+  [-4.2, -3.35, -2.5, -1.65].forEach((x) => add("hard", "printer", x, -4.4));
+  add("hard", "bench", 1.4, -4.3); add("hard", "bench", 3.6, -4.3);
+  add("hard", "shelf", 4.3, -1.6, -Math.PI / 2, { location: LOC["Lab A"] });
+  add("hard", "bench", -2.6, 2.8); add("hard", "bench", -0.4, 2.8, R);
+  add("hard", "workstation", 3.2, 2.4, 0, { owner: PERSON["Eric Mugisha"] });
+  add("hard", "fan", -4.4, 0.2); add("hard", "plant", 4.4, 4.4);
+  // Kit bay (10 × 10): flight cases (Field Kit), pallet, plywood, ladder
+  add("field", "cases", -3.2, -3.5, 0, { location: LOC["Field Kit"] });
+  add("field", "pallet", -0.8, -3.6);
+  add("field", "shelf", 3.6, -4.1);
+  add("field", "bench", 2.4, 1.8);
+  add("field", "plywood", -3.4, 4.1, R); add("field", "ladder", 4.0, 3.6);
+  // Stockroom corner (14 × 8): the shelving L itself comes from the location tree
+  add("stock", "heavyRack", 3.6, -3.35, 0, { location: LOC["Rack 1"] });
+  add("stock", "bench", 0.4, -0.6); add("stock", "bench", 2.7, -0.6);
+  add("stock", "workstation", 3.2, 2.6, R, { owner: PERSON["Aline Uwase"] });
+  add("stock", "pallet", -4.4, 2.6);
+  add("stock", "bin", 6.3, 3.4);
   return P;
 }
 
@@ -191,7 +194,7 @@ function freshState() {
   const movements = F.MOVEMENTS.map((m) => ({ ...m, id: mid++, location_id: m.location_id === whId && moveTo[m.item_id] ? moveTo[m.item_id] : m.location_id }));
 
   return {
-    v: 3, me: null, items, locations, stock, movements, nextMovement: mid,
+    v: 5, me: null, items, locations, stock, movements, nextMovement: mid,
     people: F.PEOPLE.map((p) => ({ ...p, dept: HOME[p.name] || null })),
     departments: DEPARTMENTS.map((d) => ({ ...d })),
     pieces: defaultPieces(), nextPiece: 1000,
@@ -203,7 +206,7 @@ function freshState() {
 let state = load();
 const listeners = new Set();
 function load() {
-  try { const raw = localStorage.getItem(STORE_KEY); if (raw) { const s = JSON.parse(raw); if (s?.v === 3) return s; } } catch { /* blocked storage: start fresh */ }
+  try { const raw = localStorage.getItem(STORE_KEY); if (raw) { const s = JSON.parse(raw); if (s?.v === 5) return s; } } catch { /* blocked storage: start fresh */ }
   return freshState();
 }
 function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch { /* non-fatal */ } }

@@ -312,6 +312,7 @@ body.editing .hint { opacity: 0; }
 /* building tags floating over the campus */
 .bldg-tags { position: fixed; inset: 0; pointer-events: none; z-index: 3; transition: opacity 0.4s var(--ease); }
 .bldg-tags.hide, body.pre .bldg-tags { opacity: 0; }
+.bldg-tags.outside .bt:not(.bt-tower), .bldg-tags:not(.outside) .bt-tower { display: none; }
 body.pre .bldg-tags .bt { pointer-events: none; }
 .bldg-tags.hide .bt { pointer-events: none; }
 .bt { position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 8px; border-radius: 999px; background: var(--glass-2); border: 1px solid var(--line-2); color: var(--ink); font: 13px var(--sans); white-space: nowrap; pointer-events: auto; cursor: pointer; transition: border-color 0.2s, background 0.2s; }

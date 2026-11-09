@@ -294,3 +294,65 @@ export function siteDecals(site, paths, parking) {
   t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
   return t;
 }
+
+/** Street level: pavement ring round the block, a two-lane road, kerbs, crossings. */
+export function streetDecals(bounds, plate, street) {
+  const { x0, x1, z0, z1 } = bounds, px = 10;
+  const W = Math.round((x1 - x0) * px), H = Math.round((z1 - z0) * px);
+  const [c, g] = canvas(W, H);
+  const X = (x) => (x - x0) * px, Z = (z) => (z - z0) * px, rand = rng(91);
+  g.clearRect(0, 0, W, H);
+  // pavement round the building
+  g.fillStyle = "#b5ada2"; g.fillRect(X(plate.x0 - 5), Z(plate.z0 - 5), (plate.x1 - plate.x0 + 10) * px, (street.z - street.width / 2 - plate.z0 + 5) * px);
+  g.strokeStyle = "rgba(120,112,100,.35)"; g.lineWidth = 1;
+  for (let x = plate.x0 - 5; x < plate.x1 + 5; x += 1.2) { g.beginPath(); g.moveTo(X(x), Z(plate.z0 - 5)); g.lineTo(X(x), Z(street.z - street.width / 2)); g.stroke(); }
+  // road + kerb + centre line + zebra at the entrance
+  g.fillStyle = "#d4cec4"; g.fillRect(0, Z(street.z - street.width / 2 - 0.3), W, 0.3 * px);
+  g.fillStyle = "#3a3b3e"; g.fillRect(0, Z(street.z - street.width / 2), W, street.width * px);
+  g.setLineDash([3 * px, 2.5 * px]); g.strokeStyle = "rgba(236,232,220,.85)"; g.lineWidth = 0.14 * px;
+  g.beginPath(); g.moveTo(0, Z(street.z)); g.lineTo(W, Z(street.z)); g.stroke(); g.setLineDash([]);
+  g.fillStyle = "rgba(236,232,220,.9)";
+  for (let k = 0; k < 7; k++) g.fillRect(X(36 + k * 0.9), Z(street.z - street.width / 2 + 0.6), 0.5 * px, (street.width - 1.2) * px);
+  g.globalCompositeOperation = "source-atop";
+  speckle(g, W, H, 22000, rand, ["rgba(0,0,0,.12)", "rgba(255,255,255,.06)"], 1.6);
+  g.globalCompositeOperation = "source-over";
+  const t = tex(c, { aniso: 8 });
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  return t;
+}
+
+/** Curtain wall: tinted glass with mullions and a spandrel band, tiled per 1.5 m bay. */
+export function curtainWall() {
+  const S = 256;
+  const [c, g] = canvas(S);
+  const grd = g.createLinearGradient(0, 0, 0, S);
+  grd.addColorStop(0, "#5f7486"); grd.addColorStop(0.55, "#33475a"); grd.addColorStop(1, "#283846");
+  g.fillStyle = grd; g.fillRect(0, 0, S, S);
+  g.fillStyle = "rgba(255,255,255,.07)"; g.beginPath(); g.moveTo(S * 0.15, 0); g.lineTo(S * 0.5, 0); g.lineTo(S * 0.2, S); g.lineTo(0, S); g.fill();
+  g.fillStyle = "#c9ccd0"; g.fillRect(0, 0, 6, S); g.fillRect(0, S - 8, S, 8);
+  return tex(c);
+}
+
+/** Polished cream porcelain tiles, 60 cm, thin grout — tiles once per 60 cm. */
+export function tiles() {
+  const S = 256, rand = rng(13);
+  const [c, g] = canvas(S);
+  g.fillStyle = "#e7e1d6"; g.fillRect(0, 0, S, S);
+  // faint marble veining, kept low-contrast so the hall reads as one polished floor
+  for (let i = 0; i < 10; i++) { g.strokeStyle = `rgba(200,190,175,${0.08 + rand() * 0.08})`; g.lineWidth = 1 + rand() * 2; g.beginPath(); const y = rand() * S; g.moveTo(0, y); g.bezierCurveTo(S * 0.3, y + rand() * 60 - 30, S * 0.7, y + rand() * 60 - 30, S, y + rand() * 40 - 20); g.stroke(); }
+  speckle(g, S, S, 300, rand, ["rgba(150,140,125,.1)", "rgba(255,255,255,.14)"], 0.8);
+  g.fillStyle = "#bdb5a8"; g.fillRect(0, 0, S, 3); g.fillRect(0, 0, 3, S);
+  const [rc, rg] = canvas(64); rg.fillStyle = "#2a2a2a"; rg.fillRect(0, 0, 64, 64); rg.fillStyle = "#9a9a9a"; rg.fillRect(0, 0, 64, 2); rg.fillRect(0, 0, 2, 64);
+  return { map: tex(c), roughnessMap: tex(rc, { srgb: false }) };
+}
+
+/** Frosted partition glass with a clear band, framed in aluminium. */
+export function frosted() {
+  const W = 128, H = 256;
+  const [c, g] = canvas(W, H);
+  g.fillStyle = "rgba(232,236,238,0.92)"; g.fillRect(0, 0, W, H);
+  g.fillStyle = "rgba(180,196,205,0.35)"; g.fillRect(0, H * 0.08, W, H * 0.16);
+  g.fillStyle = "rgba(150,170,182,0.25)"; g.fillRect(0, H * 0.74, W, H * 0.26);
+  g.fillStyle = "#d8dbde"; g.fillRect(0, 0, 5, H); g.fillRect(0, 0, W, 6); g.fillRect(0, H - 6, W, 6); g.fillRect(0, H * 0.7, W, 4);
+  return tex(c);
+}

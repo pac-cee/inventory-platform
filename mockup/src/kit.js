@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 const C = {
-  oak: "#c49a6c", birch: "#e2cfae", white: "#eeeae2", steel: "#8d939a", dark: "#2b2e33", black: "#17181b",
+  oak: "#d6ad74", birch: "#f1efea", pine: "#d9b07a", gold: "#c9a24a", red: "#b3202b", wood2: "#c89a62", white: "#eeeae2", steel: "#8d939a", dark: "#2b2e33", black: "#17181b",
   screen: "#6f8fb3", keys: "#cfd3d8", seat: "#3a3f47", orange: "#e8762b", blue: "#2f6db3", green: "#4f8a3a",
   leaf: "#3f7d3a", leaf2: "#5a9a44", pot: "#b9b2a6", board: "#f6f6f2", fabric: "#5c6672", case: "#24262a",
   pallet: "#b48a5a", card: "#b98d5c", led: "#7cf0a8", yellow: "#e8c23a", rubber: "#222",
@@ -29,6 +29,14 @@ const ball = (r, color, x, y, z, detail = 1) => part(new THREE.IcosahedronGeomet
 const merge = (parts) => { const g = mergeGeometries(parts.map((p) => (p.index ? p.toNonIndexed() : p)), false); g.computeVertexNormals(); g.computeBoundingBox(); g.computeBoundingSphere(); return g; };
 const legs = (w, d, h, color, inset = 0.05, t = 0.05) => [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sz]) => box(t, h, t, color, sx * (w / 2 - inset), 0, sz * (d / 2 - inset)));
 
+function banquet(x, z, ry = 0) {
+  const p = [];
+  for (const [dx, dz] of [[-0.2, -0.2], [0.2, -0.2], [-0.2, 0.2], [0.2, 0.2]]) p.push(box(0.03, 0.46, 0.03, C.gold, x + dx, 0, z + dz));
+  p.push(box(0.46, 0.07, 0.46, C.red, x, 0.46, z));
+  const bx = x + Math.sin(ry) * 0.21, bz = z + Math.cos(ry) * 0.21;
+  p.push(box(0.42, 0.5, 0.05, C.red, bx, 0.53, bz, ry), box(0.46, 0.04, 0.06, C.gold, bx, 1.02, bz, ry));
+  return p;
+}
 function chair(x, z, ry = 0) {
   const p = [];
   p.push(cyl(0.28, 0.04, C.black, x, 0.02, z, 5));
@@ -41,42 +49,46 @@ function chair(x, z, ry = 0) {
 
 const BUILD = {
   workstation() {
+    // white laminate top on a pine frame, desktop PC, red banquet chair (as in the dev rows)
     return merge([
-      box(1.6, 0.04, 0.8, C.birch, 0, 0.72, -0.35), ...legs(1.6, 0.8, 0.72, C.dark).map((g) => g.translate(0, 0, -0.35)),
-      box(0.6, 0.36, 0.03, C.black, -0.25, 0.86, -0.62), box(0.56, 0.32, 0.005, C.screen, -0.25, 0.88, -0.6),
-      box(0.05, 0.12, 0.05, C.dark, -0.25, 0.76, -0.64),
-      box(0.42, 0.25, 0.02, C.black, 0.42, 0.79, -0.58, -0.25), box(0.42, 0.015, 0.14, C.keys, -0.2, 0.76, -0.2),
-      cyl(0.04, 0.1, C.white, 0.5, 0.76, -0.25),
-      ...chair(-0.2, 0.32, 0),
+      box(1.6, 0.04, 0.8, C.birch, 0, 0.74, -0.35), ...legs(1.6, 0.8, 0.74, C.pine, 0.05, 0.06).map((g) => g.translate(0, 0, -0.35)),
+      box(1.5, 0.05, 0.05, C.pine, 0, 0.66, -0.72),
+      box(0.62, 0.38, 0.03, C.black, -0.2, 0.9, -0.62), box(0.58, 0.34, 0.005, C.screen, -0.2, 0.92, -0.6), box(0.05, 0.14, 0.05, C.dark, -0.2, 0.78, -0.64), box(0.24, 0.02, 0.18, C.dark, -0.2, 0.78, -0.64),
+      box(0.2, 0.42, 0.42, C.black, 0.55, 0, -0.45), box(0.42, 0.015, 0.14, C.dark, -0.2, 0.78, -0.22),
+      ...banquet(-0.2, 0.32, 0),
     ]);
   },
   bench() {
-    const p = [box(2.0, 0.05, 0.8, C.oak, 0, 0.88, 0), ...legs(2.0, 0.8, 0.88, C.steel), box(1.9, 0.03, 0.7, C.steel, 0, 0.22, 0)];
+    const p = [box(2.0, 0.05, 0.8, C.oak, 0, 0.88, 0), ...legs(2.0, 0.8, 0.88, C.pine, 0.05, 0.06), box(1.9, 0.03, 0.7, C.pine, 0, 0.22, 0)];
     p.push(box(2.0, 1.0, 0.03, "#c9a878", 0, 0.93, -0.38));
     [[-0.7, C.orange], [-0.35, C.blue], [0, C.dark], [0.4, C.yellow], [0.75, C.steel]].forEach(([x, c], i) => p.push(box(0.08 + (i % 2) * 0.06, 0.22, 0.03, c, x, 1.3 + (i % 3) * 0.12, -0.35)));
     p.push(box(0.3, 0.12, 0.22, C.blue, -0.6, 0.93, -0.1), box(0.22, 0.08, 0.16, C.yellow, 0.5, 0.93, 0.05));
     return merge(p);
   },
   printer() {
+    // big enclosed printer (silver shell, dark glass) on its own pine table
     return merge([
-      box(0.62, 0.62, 0.62, C.dark, 0, 0.75, 0), box(0.56, 0.52, 0.005, "#6f7a86", 0, 0.8, 0.312),
-      box(0.4, 0.02, 0.4, C.orange, 0, 0.95, 0), ...legs(0.7, 0.7, 0.75, C.steel),
-      box(0.7, 0.04, 0.7, C.white, 0, 0.71, 0),
+      box(0.8, 0.04, 0.7, C.pine, 0, 0.72, 0), ...legs(0.8, 0.7, 0.72, C.pine, 0.04, 0.05), box(0.72, 0.03, 0.62, C.pine, 0, 0.18, 0),
+      box(0.56, 0.62, 0.56, "#c9ccd0", 0, 0.76, -0.02), box(0.44, 0.46, 0.005, "#1d2228", 0, 0.84, 0.262),
+      box(0.56, 0.06, 0.56, C.dark, 0, 1.38, -0.02), box(0.1, 0.1, 0.01, C.led, 0.18, 1.28, 0.262),
+      box(0.3, 0.25, 0.3, C.dark, -0.1, 0.21, 0),
     ]);
   },
   shelf() {
-    const p = [...[[-0.62, -0.27], [0.62, -0.27], [-0.62, 0.27], [0.62, 0.27]].map(([x, z]) => box(0.04, 1.95, 0.04, C.steel, x, 0, z))];
-    [0.12, 0.6, 1.08, 1.56].forEach((y, i) => {
-      p.push(box(1.28, 0.03, 0.56, C.steel, 0, y, 0));
-      [-0.4, 0.05, 0.42].forEach((x, k) => { if ((i + k) % 3 !== 2) p.push(box(0.34, 0.24 + ((i * k) % 3) * 0.05, 0.42, [C.blue, C.card, C.white][(i + k) % 3], x, y + 0.03, 0)); });
+    // pine shelving unit, cardboard boxes and parts trays
+    const p = [...[[-0.62, -0.25], [0.62, -0.25], [-0.62, 0.25], [0.62, 0.25]].map(([x, z]) => box(0.05, 2.2, 0.05, C.pine, x, 0, z)), box(1.28, 2.2, 0.02, C.wood2, 0, 0, -0.27)];
+    [0.1, 0.62, 1.14, 1.66, 2.16].forEach((y, i) => {
+      p.push(box(1.28, 0.03, 0.54, C.pine, 0, y, 0));
+      if (i < 4) [-0.38, 0.05, 0.42].forEach((x, k) => { if ((i + k) % 4 !== 3) p.push(box(0.36, 0.26 + ((i * k) % 3) * 0.06, 0.4, (i + k) % 3 === 1 ? C.white : C.card, x, y + 0.03, 0)); });
     });
     return merge(p);
   },
   heavyRack() {
-    const p = [...[-1.28, 0, 1.28].flatMap((x) => [box(0.08, 2.6, 0.07, "#1f4e8c", x, 0, -0.5), box(0.08, 2.6, 0.07, "#1f4e8c", x, 0, 0.5)])];
-    [0.15, 1.0, 1.85].forEach((y, i) => {
-      p.push(box(2.6, 0.1, 0.05, "#e0621d", 0, y, 0.5), box(2.6, 0.1, 0.05, "#e0621d", 0, y, -0.5), box(2.55, 0.03, 1.0, "#c9ccd0", 0, y + 0.08, 0));
-      [-0.75, 0.6].forEach((x, k) => p.push(box(0.9, 0.42 + ((i + k) % 2) * 0.12, 0.7, i === 1 ? C.card : k ? C.blue : C.card, x, y + 0.11, 0)));
+    // a wider pine unit (Main Store › Rack 1), level 2 holds the cables and camera boxes
+    const p = [...[-1.28, 0, 1.28].flatMap((x) => [box(0.06, 2.4, 0.06, C.pine, x, 0, -0.5), box(0.06, 2.4, 0.06, C.pine, x, 0, 0.5)]), box(2.6, 2.4, 0.02, C.wood2, 0, 0, -0.52)];
+    [0.12, 0.7, 1.28, 1.86, 2.36].forEach((y, i) => {
+      p.push(box(2.6, 0.03, 1.02, C.pine, 0, y, 0));
+      if (i < 4) [-0.85, 0, 0.82].forEach((x, k) => p.push(box(0.7, 0.32 + ((i + k) % 2) * 0.1, 0.8, (i + k) % 3 ? C.card : C.white, x, y + 0.03, 0)));
     });
     return merge(p);
   },
@@ -128,6 +140,28 @@ const BUILD = {
   cases() {
     return merge([box(1.3, 0.42, 0.8, C.case, 0, 0.1, 0), box(1.25, 0.38, 0.78, "#30333a", 0.02, 0.52, 0.01), box(0.6, 0.32, 0.5, C.case, -0.2, 0.9, 0),
       ...[0.1, 0.52].map((y) => box(1.32, 0.03, 0.82, C.steel, 0, y + 0.18, 0)), ...[[-0.55, 0.35], [0.55, 0.35], [-0.55, -0.35], [0.55, -0.35]].map(([x, z]) => cyl(0.05, 0.1, C.rubber, x, 0, z))]);
+  },
+  tv() {
+    // display on a rolling stand
+    return merge([box(0.7, 0.04, 0.5, C.black, 0, 0.05, 0), ...[[-0.3, -0.2], [0.3, -0.2], [-0.3, 0.2], [0.3, 0.2]].map(([x, z]) => cyl(0.04, 0.05, C.rubber, x, 0, z)),
+      box(0.06, 1.5, 0.06, C.black, -0.2, 0.09, 0), box(0.06, 1.5, 0.06, C.black, 0.2, 0.09, 0), box(0.5, 0.03, 0.3, C.black, 0, 0.7, 0.05),
+      box(1.3, 0.76, 0.06, C.black, 0, 1.1, 0.06), box(1.24, 0.7, 0.005, "#20262e", 0, 1.13, 0.092)]);
+  },
+  fan() {
+    return merge([cyl(0.22, 0.03, C.black, 0, 0, 0, 16), cyl(0.02, 1.2, C.dark, 0, 0.03, 0, 8), cyl(0.24, 0.06, C.dark, 0, 1.24, 0.02, 20), part(new THREE.TorusGeometry(0.24, 0.012, 6, 24), C.dark, 0, 1.24 + 0.24, 0.06)]);
+  },
+  bin() {
+    return merge([box(0.5, 0.82, 0.55, "#1f5fbf", 0, 0.06, 0), box(0.54, 0.06, 0.6, "#1a4f9f", 0, 0.88, 0.02), part(new THREE.CylinderGeometry(0.08, 0.08, 0.05, 12), C.rubber, -0.2, 0.08, -0.24, 0, 0, Math.PI / 2), part(new THREE.CylinderGeometry(0.08, 0.08, 0.05, 12), C.rubber, 0.2, 0.08, -0.24, 0, 0, Math.PI / 2)]);
+  },
+  ladder() {
+    const p = [part(new THREE.BoxGeometry(0.05, 2.0, 0.04), C.steel, -0.25, 0.97, -0.25, 0, -0.25, 0), part(new THREE.BoxGeometry(0.05, 2.0, 0.04), C.steel, 0.25, 0.97, -0.25, 0, -0.25, 0),
+      part(new THREE.BoxGeometry(0.05, 2.0, 0.04), C.steel, -0.25, 0.97, 0.25, 0, 0.25, 0), part(new THREE.BoxGeometry(0.05, 2.0, 0.04), C.steel, 0.25, 0.97, 0.25, 0, 0.25, 0)];
+    for (let k = 0; k < 6; k++) p.push(box(0.5, 0.03, 0.08, C.steel, 0, 0.25 + k * 0.3, -0.42 + k * 0.07));
+    return merge(p);
+  },
+  plywood() {
+    // sheets leaning on the wall, as near the entrance in the video
+    return merge([part(new THREE.BoxGeometry(1.22, 2.44, 0.02), "#d8b885", -0.6, 1.2, 0.1, 0, -0.12, 0), part(new THREE.BoxGeometry(1.22, 2.44, 0.02), "#cfae7a", 0.62, 1.2, 0.05, 0, -0.1, 0), part(new THREE.BoxGeometry(1.22, 2.44, 0.02), "#dcc090", 0.0, 1.2, -0.05, 0, -0.08, 0)]);
   },
   pallet() {
     const p = [box(1.2, 0.03, 1.0, C.pallet, 0, 0.12, 0), ...[-0.5, 0, 0.5].map((x) => box(0.12, 0.12, 1.0, C.pallet, x, 0, 0))];
