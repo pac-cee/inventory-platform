@@ -1,0 +1,292 @@
+name: android-release
+
+# Android release of the INVENTORY app: build a release APK with the production
+# API baked in, sign it with the release keystore, and keep it as a downloadable
+# build artifact. Push a tag named  android-v<version>  (for example
+# android-v0.1.1) on a commit that is on main, or run it by hand.
+#
+# Adapted from ego-mobile's android-release.yml, minus the Firebase upload: the
+# inventory app is installed straight from the APK, so no Google service-account
+# key is needed. (That key is only for uploading to Firebase App Distribution;
+# it has nothing to do with signing.)
+#
+# SIGNING. An APK can only UPDATE an installed copy if it is signed with the SAME
+# key as that copy. Releases built so far were debug-signed on whichever machine
+# built them, so the first build signed with the release keystore cannot install
+# over them: uninstall once, install, and every later build updates in place.
+# A tag therefore refuses to build without the keystore secrets; a manual run
+# without them still builds (debug-signed) so the pipeline itself can be tried.
+#
+# runs-on: android — a DOCKER runner whose default image has no JDK, Android SDK
+# or Flutter, so the job installs them (cached weekly). Same recipe, same
+# network-flake retries as ego's.
+#
+# Forgejo quirks: this repo is a pull MIRROR of GitHub (sync it first); the
+# workflow must exist on the tagged commit; use a fresh tag name per attempt;
+# manual "Run workflow" only works once this file is on main.
+
+on:
+  push:
+    tags:
+      - "android-v*"
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: "API the app talks to (default: production)"
+        required: false
+        default: ""
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: android
+    timeout-minutes: 90
+    env:
+      FLUTTER_VERSION: "3.44.0"
+      # Production unless a manual run says otherwise (or the repo variable API_URL).
+      API_URL: ${{ github.event.inputs.api_url || vars.API_URL || 'https://api-production-4a46.up.railway.app' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify this tag's commit is reachable from main
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "OK: $GITHUB_REF_NAME is reachable from main"
+          else
+            echo "::error::$GITHUB_REF_NAME points at a commit that is not on main — refusing to release. Merge to main first, then tag." >&2
+            exit 1
+          fi
+
+      # versionName from the tag (android-v0.1.1 -> 0.1.1). versionCode must go UP
+      # for an update to install: 100 + the run number (installed copies so far
+      # carry versionCode 1).
+      - name: Work out the version
+        id: ver
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            v="${GITHUB_REF_NAME#android-v}"
+            [[ "$v" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "::error::Tag '$GITHUB_REF_NAME' must look like android-v0.1.1" >&2; exit 1; }
+          else
+            v="$(sed -n 's/^version: *\([0-9.]*\).*/\1/p' mobile/pubspec.yaml | head -n1)"
+          fi
+          echo "name=$v" >> "$GITHUB_OUTPUT"
+          echo "code=$((100 + ${GITHUB_RUN_NUMBER:-1}))" >> "$GITHUB_OUTPUT"
+          echo "==> versionName $v, versionCode $((100 + ${GITHUB_RUN_NUMBER:-1})), API $API_URL"
+
+      - name: Compute the cache week
+        id: week
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Android SDK, Flutter SDK and pub cache
+        id: toolchain
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/android-sdk
+            ~/flutter
+            ~/.pub-cache
+          key: android-toolchain-${{ env.FLUTTER_VERSION }}-${{ steps.week.outputs.week }}-${{ hashFiles('mobile/pubspec.lock', 'mobile/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            android-toolchain-${{ env.FLUTTER_VERSION }}-${{ steps.week.outputs.week }}-
+
+      # android/app/build.gradle.kts compiles for Java 17.
+      - name: Install JDK 17 and build tools
+        run: |
+          set -euo pipefail
+          # IPv4 only, with timeouts and a retry loop: this runner's containers
+          # resolve deb.debian.org to IPv6 addresses they cannot route to, and a
+          # run once sat on this step for 45 minutes with no output.
+          APT_OPTS="-o Acquire::ForceIPv4=true -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          ok=0
+          for attempt in 1 2 3; do
+            if timeout 600 apt-get $APT_OPTS update -qq \
+              && timeout 900 apt-get $APT_OPTS install -y -qq --no-install-recommends \
+                openjdk-17-jdk-headless unzip zip xz-utils curl git ca-certificates; then
+              ok=1
+              break
+            fi
+            echo "::warning::apt attempt $attempt failed; retrying in $((attempt * 30))s"
+            sleep $((attempt * 30))
+          done
+          [ "$ok" = 1 ] || { echo "::error::apt could not install the JDK after 3 attempts" >&2; exit 1; }
+          JAVA_HOME="$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")"
+          echo "JAVA_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+          java -version
+
+      - name: Install Android SDK command-line tools
+        run: |
+          set -euo pipefail
+          SDK="$HOME/android-sdk"
+          if [ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            echo "Using the cached Android SDK"
+          else
+            mkdir -p "$SDK/cmdline-tools"
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o /tmp/cmdline-tools.zip \
+              https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q /tmp/cmdline-tools.zip -d "$SDK/cmdline-tools"
+            mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+          fi
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+          # `yes` dies of SIGPIPE when sdkmanager closes stdin; that must not fail the step.
+          set +o pipefail
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          set -o pipefail
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platform-tools"
+
+      # Pinned to the version this app is built and tested with (docs/MOBILE_DEPLOY.md).
+      - name: Install Flutter
+        run: |
+          set -euo pipefail
+          if [ -d "$HOME/flutter/.git" ]; then
+            echo "Using the cached Flutter SDK"
+          else
+            git clone https://github.com/flutter/flutter.git -b "$FLUTTER_VERSION" --depth 1 "$HOME/flutter"
+          fi
+          echo "$HOME/flutter/bin" >> "$GITHUB_PATH"
+          "$HOME/flutter/bin/flutter" --version
+
+      # mobile/.env is gitignored but is a declared Flutter asset: without it the
+      # build stops with "asset not found". The real API address comes from
+      # --dart-define below, which takes precedence over this file.
+      - name: Create the bundled .env from the example
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          [ -f .env ] || cp .env.example .env
+
+      - name: Point Flutter at the Android SDK and resolve dependencies
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          flutter config --android-sdk "$ANDROID_HOME"
+          flutter pub get
+
+      - name: Restore the Gradle cache
+        id: gradlecache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+          key: gradle-${{ hashFiles('mobile/android/gradle/wrapper/gradle-wrapper.properties', 'mobile/android/build.gradle*', 'mobile/android/settings.gradle*', 'mobile/android/app/build.gradle*', 'mobile/pubspec.lock') }}
+          restore-keys: |
+            gradle-
+
+      # Writes android/key.properties (gitignored) only when the keystore secret
+      # exists; otherwise build.gradle.kts falls back to debug signing on its own.
+      - name: Set up release signing (if the keystore secrets exist)
+        id: signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 is not set. A release tag must be signed with the release key — a debug-signed build cannot update an installed copy. Add the keystore secrets (see Crucial_Docs/INVENTORY-RELEASE-AND-CI-PLAN.md, Part C) and re-run." >&2
+              exit 1
+            fi
+            echo "::warning::No keystore secret: this manual run is DEBUG-signed. Fine for trying the pipeline, never for handing out."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          keystore="${RUNNER_TEMP:-/tmp}/release.jks"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d ' \r\n' | base64 -d > "$keystore"
+          # Fail in seconds on a wrong alias or password, not after a 15-minute build.
+          keytool -list -keystore "$keystore" -alias "$ANDROID_KEY_ALIAS" \
+            -storepass:env ANDROID_KEYSTORE_PASSWORD > /dev/null
+          # printf, not a heredoc: passwords containing $ or backticks stay literal.
+          printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=%s\n' \
+            "$ANDROID_KEYSTORE_PASSWORD" "$ANDROID_KEY_PASSWORD" "$ANDROID_KEY_ALIAS" "$keystore" \
+            > mobile/android/key.properties
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          # Gradle downloads its own distribution on the first run, and connections
+          # from these runners to GitHub-hosted downloads reset intermittently. Retry
+          # with a growing pause, but ONLY when the log shows a network failure — a
+          # real compile error must fail at once.
+          transient='Gradle threw an error while downloading|SocketException|Connection reset|Could not (GET|HEAD)|Read timed out|Remote host terminated|Temporary failure in name resolution|Premature end of Content-Length'
+          log="${RUNNER_TEMP:-/tmp}/flutter-build.log"
+          for attempt in 1 2 3 4; do
+            set +e
+            flutter build apk --release \
+              --build-name="${{ steps.ver.outputs.name }}" \
+              --build-number="${{ steps.ver.outputs.code }}" \
+              --dart-define=API_URL="$API_URL" 2>&1 | tee "$log"
+            rc=${PIPESTATUS[0]}
+            set -e
+            [ "$rc" -eq 0 ] && break
+            if [ "$attempt" -lt 4 ] && grep -qE "$transient" "$log"; then
+              echo "::warning::flutter build failed on a network error (attempt $attempt/4); retrying in $((attempt * 30))s"
+              sleep $((attempt * 30))
+              continue
+            fi
+            exit "$rc"
+          done
+          # Give the file a name that says which build it is.
+          cp build/app/outputs/flutter-apk/app-release.apk "build/app/outputs/flutter-apk/inventory-${{ steps.ver.outputs.name }}-${{ steps.ver.outputs.code }}.apk"
+          ls -la build/app/outputs/flutter-apk/
+
+      # Sanity check: say which key signed it, so a debug-signed build is obvious
+      # in the log. Never prints a secret (only the certificate's own fingerprint).
+      - name: Show who signed the APK
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          apksigner="$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n1 || true)"
+          if [ -n "$apksigner" ]; then
+            "$apksigner" verify --print-certs "build/app/outputs/flutter-apk/app-release.apk" | grep -E "Signer #1 certificate (DN|SHA-256)" || true
+          else
+            echo "apksigner not found in the SDK; skipping the signer check"
+          fi
+
+      - name: Save Android SDK, Flutter SDK and pub cache
+        if: success() && steps.toolchain.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/android-sdk
+            ~/flutter
+            ~/.pub-cache
+          key: android-toolchain-${{ env.FLUTTER_VERSION }}-${{ steps.week.outputs.week }}-${{ hashFiles('mobile/pubspec.lock', 'mobile/android/gradle/wrapper/gradle-wrapper.properties') }}
+
+      - name: Save the Gradle cache
+        if: success() && steps.gradlecache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.gradle/wrapper
+            ~/.gradle/caches
+          key: gradle-${{ hashFiles('mobile/android/gradle/wrapper/gradle-wrapper.properties', 'mobile/android/build.gradle*', 'mobile/android/settings.gradle*', 'mobile/android/app/build.gradle*', 'mobile/pubspec.lock') }}
+
+      # @v3: upload-artifact@v4 needs GitHub's own artifact backend and does not
+      # work on Forgejo runners.
+      - name: Upload the APK
+        if: success()
+        uses: actions/upload-artifact@v3
+        with:
+          name: inventory-android-apk
+          path: mobile/build/app/outputs/flutter-apk/inventory-*.apk
+          if-no-files-found: error
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f mobile/android/key.properties "${RUNNER_TEMP:-/tmp}/release.jks"

@@ -1,0 +1,17 @@
+{
+  "name": "inventory-app",
+  "private": true,
+  "scripts": {
+    "api:install": "npm --prefix supabase/api install",
+    "api:dev": "npm --prefix supabase/api run dev",
+    "api:build": "npm --prefix supabase/api run build",
+    "api:start": "npm --prefix supabase/api start",
+    "api:typecheck": "npm --prefix supabase/api run typecheck",
+    "api:perf": "set -a; . supabase/perf/.env; set +a; k6 run supabase/perf/test.js",
+    "api:perf:out": "set -a; . supabase/perf/.env; set +a; k6 run supabase/perf/test.js --out json=supabase/perf/artifacts/results-$(date +%Y%m%d%H%M%S).json",
+    "api:test": "npm --prefix supabase/api test"
+  },
+  "devDependencies": {
+    "supabase": "^2.107.0"
+  }
+}

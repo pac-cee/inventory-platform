@@ -1,0 +1,335 @@
+@import "tailwindcss";
+
+/* Enable `dark:` utilities driven by the `.dark` class on <html>. */
+@custom-variant dark (&:is(.dark *));
+
+/*
+  Verlet design system tokens. macOS-inspired: solid surfaces, pink `--highlight`
+  accent, typographic contrast (serif headings / mono numbers / sans body).
+  Light is the default; adding `.dark` to <html> swaps every token so the whole
+  UI re-themes without per-component dark: variants.
+*/
+:root {
+  --background: #f6f5f3;
+  --nav-current: rgba(0, 0, 0, 0.1);
+  --foreground: #1c1c1e;
+  --card: rgba(255, 255, 255, 0.65);
+  --card-foreground: #1c1c1e;
+  /* Popups sit ON TOP of page content, so they must be solid: at 85% the
+     text behind a dropdown showed through and made it unreadable. */
+  --popover: #ffffff;
+  --popover-foreground: #1c1c1e;
+  --primary: #1c1c1e;
+  --primary-foreground: #ffffff;
+  --secondary: #ebe9e5;
+  --secondary-foreground: #1c1c1e;
+  --muted: #ebe9e5;
+  --muted-foreground: #6e6e73;
+  --accent: #ebe9e5;
+  --accent-foreground: #1c1c1e;
+  --destructive: #ff3b30;
+  --destructive-foreground: #ffffff;
+  --destructive-soft: rgba(255, 59, 48, 0.08);
+  --border: rgba(0, 0, 0, 0.08);
+  --input: rgba(0, 0, 0, 0.08);
+  --ring: #d64d7a;
+  --highlight: #d64d7a;
+  --highlight-foreground: #ffffff;
+  --highlight-soft: rgba(214, 77, 122, 0.08);
+  --surface: rgba(0, 0, 0, 0.04);
+  --separator: rgba(0, 0, 0, 0.06);
+  --hover: rgba(0, 0, 0, 0.04);
+  --success: #28784b;
+  --success-foreground: #ffffff;
+  --success-soft: rgba(52, 199, 89, 0.1);
+  --warning: #ff9f0a;
+  --warning-foreground: #ffffff;
+  --warning-soft: rgba(255, 159, 10, 0.1);
+  --info: #5ac8fa;
+  --info-foreground: #ffffff;
+  --info-soft: rgba(90, 200, 250, 0.1);
+}
+
+.dark {
+  --background: #0b0a09;
+  --nav-current: rgba(255, 255, 255, 0.14);
+  --foreground: rgba(255, 255, 255, 0.92);
+  --card: rgba(22, 22, 26, 0.7);
+  --card-foreground: rgba(255, 255, 255, 0.92);
+  --popover: #18181c;
+  --popover-foreground: rgba(255, 255, 255, 0.92);
+  --primary: #ffffff;
+  --primary-foreground: #0a0a0c;
+  --secondary: rgba(255, 255, 255, 0.08);
+  --secondary-foreground: rgba(255, 255, 255, 0.92);
+  --muted: rgba(255, 255, 255, 0.08);
+  --muted-foreground: rgba(255, 255, 255, 0.62);
+  --accent: rgba(255, 255, 255, 0.08);
+  --accent-foreground: rgba(255, 255, 255, 0.92);
+  --destructive: #ff453a;
+  --destructive-foreground: #ffffff;
+  --destructive-soft: rgba(255, 69, 58, 0.1);
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.1);
+  --ring: #e06090;
+  --highlight: #e06090;
+  --highlight-foreground: #ffffff;
+  --highlight-soft: rgba(224, 96, 144, 0.1);
+  --surface: rgba(255, 255, 255, 0.04);
+  --separator: rgba(255, 255, 255, 0.06);
+  --hover: rgba(255, 255, 255, 0.04);
+  --success: #87bd98;
+  --success-foreground: #ffffff;
+  --success-soft: rgba(48, 209, 88, 0.12);
+  --warning: #ffd60a;
+  --warning-foreground: #1c1c1e;
+  --warning-soft: rgba(255, 214, 10, 0.12);
+  --info: #64d2ff;
+  --info-foreground: #1c1c1e;
+  --info-soft: rgba(100, 210, 255, 0.12);
+}
+
+@theme inline {
+  --color-nav-current: var(--nav-current);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-highlight: var(--highlight);
+  --color-highlight-foreground: var(--highlight-foreground);
+  --color-highlight-soft: var(--highlight-soft);
+  --color-surface: var(--surface);
+  --color-separator: var(--separator);
+  --color-hover: var(--hover);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-warning-soft: var(--warning-soft);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-info-soft: var(--info-soft);
+
+  --font-sans: var(--font-dm-sans);
+  --font-serif: var(--font-dm-serif-display);
+  --font-mono: var(--font-jetbrains-mono);
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-3xl: 20px;
+
+  /*
+    Backward-compat aliases for the app's previous token names. These keep the
+    existing bg-canvas / bg-surface-2 / border-line / text-fg usages working
+    while pages are migrated to native Verlet tokens. (bg-surface and text-muted
+    are migrated in code instead — they collided with Verlet's own tokens.)
+  */
+  --color-canvas: var(--background);
+  --color-surface-2: var(--secondary);
+  --color-line: var(--border);
+  --color-fg: var(--foreground);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  /* Stable density matches the Ego operations workspace. */
+  html {
+    font-size: 16px;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans text-[14px];
+    position: relative;
+  }
+
+  /* Normalize DM Serif Display's larger x-height and tighten display leading. */
+  .font-serif {
+    font-size-adjust: 0.54;
+    line-height: 1.1;
+  }
+}
+
+/* Print: drop the app chrome so a report prints as a clean document. */
+@media print {
+  aside,
+  nav,
+  header {
+    display: none !important;
+  }
+  .md\:pl-64 {
+    padding-left: 0 !important;
+  }
+  main {
+    padding: 0 !important;
+  }
+}
+
+/* Box label strips: one per row, five to a page (grouped in the component), QR
+   at the left. Sized in mm so the on-screen preview is what prints.
+   5 x 48mm + 4 x 3mm = 252mm fits A4 and Letter inside 10mm margins. Dashed
+   outline = the cut line. */
+.box-label {
+  box-sizing: border-box;
+  height: 48mm;
+  margin-bottom: 3mm;
+  border: 1px dashed #9ca3af;
+  border-radius: 2mm;
+  break-inside: avoid;
+  page-break-inside: avoid;
+}
+.box-label-title {
+  font-size: 22pt;
+}
+.box-label-path {
+  font-size: 11pt;
+}
+.box-label-code {
+  font-size: 9pt;
+}
+@page box-labels {
+  margin: 10mm;
+}
+@media print {
+  .box-label-sheet {
+    page: box-labels;
+  }
+  /* The sheet is grouped five to a page in the component; each group is a page. */
+  .label-page {
+    break-after: page;
+    page-break-after: always;
+  }
+  .label-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+  .label-page .box-label:last-child {
+    margin-bottom: 0;
+  }
+}
+
+/* Nav pending dot: starts invisible, fades in only after ~100ms of
+   ongoing navigation (per Next docs debounce) so fast clicks stay quiet. */
+@keyframes pending-dot {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+.animate-pending-dot {
+  opacity: 0;
+  animation: pending-dot 120ms ease-out 100ms forwards;
+}
+
+/* Shared interaction and accessibility rules for the operations UI. */
+a,
+button,
+input,
+textarea {
+  touch-action: manipulation;
+}
+a:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+}
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+@media (pointer: coarse) {
+  [data-slot="button"],
+  [data-slot="input"] {
+    min-height: 44px;
+  }
+}
+@media (prefers-reduced-transparency: reduce) {
+  aside {
+    background: var(--popover) !important;
+    backdrop-filter: none !important;
+  }
+  [data-slot="dialog-overlay"] {
+    backdrop-filter: none;
+    background: rgba(0, 0, 0, 0.8);
+  }
+}
+
+/* Ego reference: quiet navigation, focused workspace, deliberate hover feedback. */
+@layer components {
+  .summary-card {
+    @apply flex min-w-0 flex-col rounded-2xl border border-border bg-card p-4 transition-[background-color,border-color,transform] duration-150 hover:border-foreground/25 hover:bg-hover active:scale-[0.99] sm:p-5;
+  }
+  .summary-label {
+    @apply min-h-7 text-[10px] uppercase tracking-wide text-muted-foreground sm:min-h-0 sm:text-[11px];
+  }
+  .summary-value {
+    @apply my-2 font-serif text-3xl leading-none sm:text-[36px];
+  }
+  .summary-caption {
+    @apply mt-auto hidden items-start justify-between gap-2 text-xs leading-relaxed text-muted-foreground sm:flex;
+  }
+  .summary-caption svg {
+    @apply mt-1 shrink-0;
+  }
+  .section-heading {
+    @apply mb-3 flex items-center justify-between gap-3 px-0.5 text-[11px] text-muted-foreground;
+  }
+  .section-heading h2 {
+    @apply font-medium uppercase tracking-[0.08em];
+  }
+  .action-row {
+    @apply flex min-h-14 items-center gap-3 border-b border-separator px-4 py-3 transition-colors duration-150 last:border-b-0 hover:bg-hover sm:px-5;
+  }
+  .shortcut-link {
+    @apply flex min-h-11 items-center gap-3 rounded-xl border border-border px-4 py-3 text-[13px] text-muted-foreground transition-[background-color,border-color,color] duration-150 hover:border-foreground/25 hover:bg-hover hover:text-foreground;
+  }
+  .detail-header {
+    @apply flex flex-wrap items-start justify-between gap-4 rounded-2xl border border-border bg-card p-5 sm:p-6;
+  }
+  .detail-summary {
+    @apply grid grid-cols-3 divide-x divide-border overflow-hidden rounded-2xl border border-border bg-card;
+  }
+  .detail-summary > div {
+    @apply px-4 py-4 sm:px-6;
+  }
+  .detail-summary dt {
+    @apply text-xs text-muted-foreground;
+  }
+  .detail-summary dd {
+    @apply mt-2 font-serif text-2xl;
+  }
+}

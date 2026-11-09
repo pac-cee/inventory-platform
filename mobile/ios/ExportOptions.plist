@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Passed to `flutter build ipa` (its export-options-plist flag) by fastlane/Fastfile.
+
+  The provisioning-profile name follows fastlane match's default for an
+  appstore profile ("match AppStore <bundle id>"). It exists only after
+  `fastlane match appstore` has been run once for co.verlet.inventory — see
+  Crucial_Docs/INVENTORY-RELEASE-AND-CI-PLAN.md, Part C.
+-->
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store</string>
+	<key>teamID</key>
+	<string>4CK2QVP3CA</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>co.verlet.inventory</key>
+		<string>match AppStore co.verlet.inventory</string>
+	</dict>
+	<key>uploadSymbols</key>
+	<true/>
+	<key>compileBitcode</key>
+	<false/>
+</dict>
+</plist>

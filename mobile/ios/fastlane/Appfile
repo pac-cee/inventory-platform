@@ -1,0 +1,7 @@
+# Same Apple team as ego-mobile (4CK2QVP3CA) — the inventory app's bundle id is
+# `co.verlet.inventory` (ios/Runner.xcodeproj PRODUCT_BUNDLE_IDENTIFIER).
+#
+# No apple_id(...) on purpose: CI authenticates with the App Store Connect API
+# key (see the Fastfile), never an Apple ID + 2FA.
+app_identifier("co.verlet.inventory")
+team_id("4CK2QVP3CA")

@@ -1,0 +1,343 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--font-sans); }
+.wrap { padding: 1rem 0; margin: 1rem 2rem; }
+.drop-zone {
+  border: 1.5px dashed var(--color-border-secondary);
+  border-radius: var(--border-radius-lg);
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.15s;
+  background: var(--color-background-secondary);
+}
+.drop-zone:hover, .drop-zone.drag-over { background: var(--color-background-tertiary); }
+.drop-zone input { display: none; }
+.drop-label { font-size: 15px; color: var(--color-text-secondary); }
+.drop-label span { color: var(--color-text-primary); font-weight: 500; }
+.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 1.25rem 0; }
+.metric-card {
+  background: var(--color-background-secondary);
+  border-radius: var(--border-radius-md);
+  padding: 0.75rem 1rem;
+}
+.metric-card .label { font-size: 12px; color: var(--color-text-secondary); margin-bottom: 4px; }
+.metric-card .value { font-size: 22px; font-weight: 500; color: var(--color-text-primary); }
+.metric-card .unit { font-size: 13px; color: var(--color-text-secondary); font-weight: 400; }
+.table-wrap { overflow-x: auto; margin-top: 1.25rem; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+thead th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 10px;
+  border-bottom: 0.5px solid var(--color-border-tertiary);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+thead th:hover { color: var(--color-text-primary); }
+thead th.sorted { color: var(--color-text-primary); }
+td {
+  padding: 8px 10px;
+  border-bottom: 0.5px solid var(--color-border-tertiary);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+tr:hover td { background: var(--color-background-secondary); }
+.bar-cell { display: flex; align-items: center; gap: 8px; }
+.bar-bg { flex: 1; height: 6px; background: var(--color-border-tertiary); border-radius: 3px; min-width: 40px; }
+.bar-fill { height: 6px; border-radius: 3px; background: #3266ad; }
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+.badge-2xx { background: #EAF3DE; color: #3B6D11; }
+.badge-3xx { background: #FAEEDA; color: #854F0B; }
+.badge-4xx { background: #FBEAF0; color: #993556; }
+.badge-5xx { background: #FCEBEB; color: #A32D2D; }
+.badge-mixed { background: var(--color-background-secondary); color: var(--color-text-secondary); }
+@media (prefers-color-scheme: dark) {
+  .badge-2xx { background: #27500A; color: #C0DD97; }
+  .badge-3xx { background: #633806; color: #FAC775; }
+  .badge-4xx { background: #72243E; color: #F4C0D1; }
+  .badge-5xx { background: #791F1F; color: #F7C1C1; }
+}
+.filter-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 1rem; }
+.filter-row select, .filter-row input { font-size: 13px; padding: 5px 10px; border-radius: var(--border-radius-md); }
+.filter-row input { flex: 1; min-width: 140px; }
+.section-label { font-size: 12px; font-weight: 500; color: var(--color-text-secondary); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
+.no-data { text-align: center; padding: 2rem; color: var(--color-text-secondary); font-size: 14px; }
+th:nth-child(1) { width: 30%; }
+th:nth-child(2) { width: 10%; }
+th:nth-child(3) { width: 10%; }
+th:nth-child(4) { width: 10%; }
+th:nth-child(5) { width: 9%; }
+th:nth-child(6) { width: 23%; }
+</style>
+
+<div class="wrap">
+  <h2 class="sr-only">k6 endpoint performance analyzer</h2>
+  <div id="upload-section">
+    <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+      <i class="ti ti-upload" style="font-size: 28px; color: var(--color-text-secondary); margin-bottom: 8px; display: block;" aria-hidden="true"></i>
+      <div class="drop-label"><span>Choose your k6 JSON file</span> or drag it here</div>
+      <div style="font-size: 12px; color: var(--color-text-secondary); margin-top: 6px;">The <code>--out json=round2.json</code> output file</div>
+      <input type="file" id="file-input" accept=".json,.jsonl,.ndjson,text/plain">
+    </div>
+  </div>
+  <div id="dashboard" style="display:none;">
+    <div class="summary-grid" id="summary-grid"></div>
+    <div class="filter-row">
+      <input type="text" id="search-input" placeholder="Filter endpoints…" oninput="renderTable()">
+      <select id="method-filter" onchange="renderTable()"><option value="">All methods</option></select>
+      <select id="status-filter" onchange="renderTable()"><option value="">All status groups</option>
+        <option value="2xx">2xx</option><option value="3xx">3xx</option>
+        <option value="4xx">4xx</option><option value="5xx">5xx</option>
+      </select>
+      <label style="font-size: 13px; display: flex; align-items: center; gap: 4px; cursor: pointer;">
+        <input type="checkbox" id="show-teardown" onchange="renderTable()"> show teardown
+      </label>
+    </div>
+    <div class="table-wrap">
+      <table id="results-table">
+        <thead>
+          <tr>
+            <th onclick="sortBy('name')">Endpoint <span id="sort-name"></span></th>
+            <th onclick="sortBy('method')">Method <span id="sort-method"></span></th>
+            <th onclick="sortBy('count')" class="sorted">Requests <span id="sort-count">↓</span></th>
+            <th onclick="sortBy('avg')">Avg (ms) <span id="sort-avg"></span></th>
+            <th onclick="sortBy('status')">Status <span id="sort-status"></span></th>
+            <th>Duration</th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+      <div id="no-data" class="no-data" style="display:none;">No endpoints match</div>
+    </div>
+  </div>
+</div>
+
+<script>
+let allEndpoints = [];
+let sortKey = 'avg';
+let sortDir = -1;
+
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag-over'); handleFile(e.dataTransfer.files[0]); });
+document.getElementById('file-input').addEventListener('change', e => handleFile(e.target.files[0]));
+
+function handleFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => parseAndDisplay(e.target.result);
+  reader.readAsText(file);
+}
+
+function fmtDuration(sec) {
+  if (sec < 60) return `${sec.toFixed(0)}s`;
+  return `${Math.floor(sec / 60)}m ${(sec % 60).toFixed(0)}s`;
+}
+
+function parseAndDisplay(text) {
+  const lines = text.split('\n').filter(l => l.trim());
+  const points = {};
+  let totalReqs = 0;
+  let parseErrors = 0;
+  let minTime = Infinity, maxTime = -Infinity;
+  let failedSum = 0, failedCount = 0;
+  let peakVus = 0;
+
+  for (const line of lines) {
+    let obj;
+    try { obj = JSON.parse(line); } catch { parseErrors++; continue; }
+    if (!obj || obj.type !== 'Point') continue;
+    const tags = obj.data && obj.data.tags;
+    if (!tags) continue;
+    const name = tags.name || tags.url || 'unknown';
+    const method = tags.method || 'UNKNOWN';
+    const key = method + '||' + name;
+    const isTeardown = name === '__teardown__';
+    if (obj.metric === 'http_req_duration') {
+      const status = tags.status || '0';
+      if (!points[key]) points[key] = { name, method, values: [], waitValues: [], statuses: {}, totalCount: 0 };
+      points[key].values.push(obj.data.value);
+      points[key].statuses[status] = (points[key].statuses[status] || 0) + 1;
+      if (!isTeardown) {
+        const t = new Date(obj.data.time).getTime();
+        if (t < minTime) minTime = t;
+        if (t > maxTime) maxTime = t;
+      }
+    } else if (obj.metric === 'http_req_waiting') {
+      if (!points[key]) points[key] = { name, method, values: [], waitValues: [], statuses: {}, totalCount: 0 };
+      points[key].waitValues.push(obj.data.value);
+    } else if (obj.metric === 'http_req_failed') {
+      if (!isTeardown) { failedSum += obj.data.value; failedCount++; }
+    } else if (obj.metric === 'vus') {
+      if (obj.data.value > peakVus) peakVus = obj.data.value;
+    }
+  }
+
+  for (const line of lines) {
+    let obj;
+    try { obj = JSON.parse(line); } catch { continue; }
+    if (!obj || obj.type !== 'Point' || obj.metric !== 'http_reqs') continue;
+    const tags = obj.data && obj.data.tags;
+    if (!tags) continue;
+    const name = tags.name || tags.url || 'unknown';
+    const method = tags.method || 'UNKNOWN';
+    const key = method + '||' + name;
+    if (points[key]) points[key].totalCount += (obj.data.value || 0);
+  }
+
+  const endpoints = Object.values(points).map(ep => {
+    const vals = ep.values.sort((a,b) => a-b);
+    const n = vals.length;
+    const sum = vals.reduce((a,b) => a+b, 0);
+    const avg = n ? sum/n : 0;
+    const p50 = n ? vals[Math.floor(n*0.5)] : 0;
+    const p95 = n ? vals[Math.floor(n*0.95)] : 0;
+    const p99 = n ? vals[Math.floor(n*0.99)] : 0;
+    const min = n ? vals[0] : 0;
+    const max = n ? vals[n-1] : 0;
+    const wv = ep.waitValues.sort((a,b) => a-b);
+    const avgWait = wv.length ? wv.reduce((a,b) => a+b, 0) / wv.length : 0;
+    const count = ep.totalCount || n;
+    const statuses = ep.statuses;
+    const statusCodes = Object.keys(statuses);
+    let statusGroup = 'mixed';
+    if (statusCodes.length === 1) {
+      const s = parseInt(statusCodes[0]);
+      if (s >= 200 && s < 300) statusGroup = '2xx';
+      else if (s >= 300 && s < 400) statusGroup = '3xx';
+      else if (s >= 400 && s < 500) statusGroup = '4xx';
+      else if (s >= 500) statusGroup = '5xx';
+    } else {
+      const allSuccess = statusCodes.every(s => parseInt(s) >= 200 && parseInt(s) < 300);
+      if (allSuccess) statusGroup = '2xx';
+      else if (statusCodes.some(s => parseInt(s) >= 500)) statusGroup = '5xx';
+      else if (statusCodes.some(s => parseInt(s) >= 400)) statusGroup = '4xx';
+      else statusGroup = 'mixed';
+    }
+    return { name: ep.name, method: ep.method, count, avg, p50, p95, p99, min, max, avgWait, statusGroup, statuses };
+  });
+
+  if (endpoints.length === 0) {
+    alert('No http_req_duration data found. Make sure this is a k6 --out json file.');
+    return;
+  }
+
+  allEndpoints = endpoints;
+  sortKey = 'p99';
+  sortDir = -1;
+
+  const methods = [...new Set(endpoints.map(e => e.method))].sort();
+  const mf = document.getElementById('method-filter');
+  mf.innerHTML = '<option value="">All methods</option>';
+  methods.forEach(m => { const o = document.createElement('option'); o.value = m; o.textContent = m; mf.appendChild(o); });
+
+  const measured = endpoints.filter(e => e.name !== '__teardown__');
+  totalReqs = measured.reduce((s, e) => s + e.count, 0);
+  const overallAvg = measured.reduce((s,e) => s+e.avg*e.count, 0) / (totalReqs || 1);
+  const maxAvg = Math.max(...measured.map(e => e.avg), 0);
+  const durationSec = minTime < Infinity ? (maxTime - minTime) / 1000 : 0;
+  const avgRps = durationSec > 0 ? totalReqs / durationSec : 0;
+  const errorRate = failedCount > 0 ? failedSum / failedCount * 100 : 0;
+  document.getElementById('summary-grid').innerHTML = `
+    <div class="metric-card"><div class="label">Endpoints</div><div class="value">${endpoints.length}</div></div>
+    <div class="metric-card"><div class="label">Total requests</div><div class="value">${totalReqs.toLocaleString()}</div></div>
+    <div class="metric-card"><div class="label">Overall avg</div><div class="value">${overallAvg.toFixed(1)}<span class="unit"> ms</span></div></div>
+    <div class="metric-card"><div class="label">Slowest avg</div><div class="value">${maxAvg.toFixed(1)}<span class="unit"> ms</span></div></div>
+    <div class="metric-card"><div class="label">Test duration</div><div class="value">${fmtDuration(durationSec)}</div></div>
+    <div class="metric-card"><div class="label">Avg RPS</div><div class="value">${avgRps.toFixed(1)}<span class="unit"> req/s</span></div></div>
+    <div class="metric-card"><div class="label">Peak VUs</div><div class="value">${peakVus}</div></div>
+    <div class="metric-card"><div class="label">Error rate</div><div class="value">${errorRate.toFixed(1)}<span class="unit"> %</span></div></div>
+  `;
+
+  document.getElementById('upload-section').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'block';
+  updateSortHeaders();
+  renderTable();
+}
+
+function sortBy(key) {
+  if (sortKey === key) sortDir *= -1;
+  else { sortKey = key; sortDir = key === 'name' || key === 'method' ? 1 : -1; }
+  updateSortHeaders();
+  renderTable();
+}
+
+function updateSortHeaders() {
+  ['name','method','count','avg','status'].forEach(k => {
+    const el = document.getElementById('sort-'+k);
+    if (!el) return;
+    const th = el.parentElement;
+    th.classList.toggle('sorted', k === sortKey);
+    el.textContent = k === sortKey ? (sortDir === -1 ? '↓' : '↑') : '';
+  });
+}
+
+function renderTable() {
+  const search = document.getElementById('search-input').value.toLowerCase();
+  const methodF = document.getElementById('method-filter').value;
+  const statusF = document.getElementById('status-filter').value;
+  const showTeardown = document.getElementById('show-teardown').checked;
+  let rows = allEndpoints.filter(e => {
+    if (!showTeardown && e.name === '__teardown__') return false;
+    if (search && !e.name.toLowerCase().includes(search) && !e.method.toLowerCase().includes(search)) return false;
+    if (methodF && e.method !== methodF) return false;
+    if (statusF && e.statusGroup !== statusF) return false;
+    return true;
+  });
+  rows.sort((a,b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    if (typeof av === 'string') return sortDir * av.localeCompare(bv);
+    return sortDir * (av - bv);
+  });
+  const maxP99 = Math.max(...rows.map(r => r.p99), 1);
+  const tbody = document.getElementById('table-body');
+  if (rows.length === 0) {
+    tbody.innerHTML = '';
+    document.getElementById('no-data').style.display = 'block';
+    return;
+  }
+  document.getElementById('no-data').style.display = 'none';
+  tbody.innerHTML = rows.map(r => {
+    const pct = (r.p99 / maxP99 * 100).toFixed(1);
+    const statusCodes = Object.keys(r.statuses).sort().join(', ');
+    const badgeClass = r.statusGroup === 'mixed' ? 'badge-mixed' : 'badge-' + r.statusGroup;
+    const shortName = r.name.replace(/^https?:\/\/[^\/]+/, '');
+    return `<tr>
+      <td title="${r.name}" style="font-family: var(--font-mono); font-size: 12px;">${shortName || r.name}</td>
+      <td><span style="font-size: 11px; font-weight: 500; color: var(--color-text-secondary);">${r.method}</span></td>
+      <td>${r.count.toLocaleString()}</td>
+      <td><strong>${r.avg.toFixed(1)}</strong></td>
+      <td><span class="badge ${badgeClass}" title="${statusCodes}">${statusCodes.length > 8 ? r.statusGroup : statusCodes}</span></td>
+      <td>
+        <div class="bar-cell" style="display: flex; flex-direction: column; align-items: start;">
+            <div style="display: flex; flex-direction: row; align-items: center; gap: 1rem; width: 100%;">
+                <div class="bar-bg"><div class="bar-fill" style="width:${pct}%"></div></div>
+                <span style="font-size: 11px; color: var(--color-text-secondary); min-width: 55px; font-weight: bold;">p99: ${r.p99.toFixed(0)}ms</span>
+            </div>
+            <div style="display: flex; width: 100%; gap: 1rem;">
+                <span style="font-size: 11px; color: var(--color-text-secondary); min-width: 55px;">p50: ${r.p50.toFixed(0)}ms</span>
+                <span style="font-size: 11px; color: var(--color-text-secondary); min-width: 55px;">p95: ${r.p95.toFixed(0)}ms</span>
+                <span style="font-size: 11px; color: var(--color-text-secondary); min-width: 55px; opacity: 0.7;">avg wait: ${r.avgWait.toFixed(0)}ms</span>
+            </div>
+          </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+</script>

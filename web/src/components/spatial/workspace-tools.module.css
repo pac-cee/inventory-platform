@@ -1,0 +1,361 @@
+.navigation {
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  bottom: 20px;
+  width: 228px;
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 28px;
+  background: rgba(18, 18, 22, 0.94);
+  box-shadow: 0 20px 60px rgba(28, 28, 30, 0.1);
+  backdrop-filter: blur(40px);
+  color: #aaaab5;
+}
+.brandRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-shrink: 0;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #eeeef0;
+}
+.brand > svg {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+.brand > span {
+  font-family: var(--font-dm-serif-display);
+  font-size: 22px;
+  line-height: 1.2;
+}
+.collapse {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border-radius: 8px;
+  color: #c6c6ce;
+}
+.collapse:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.scope {
+  flex-shrink: 0;
+  margin-bottom: 16px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.scope > span {
+  display: block;
+  font-size: 11px;
+  color: #92929b;
+  line-height: 1.5;
+}
+.scope > strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: #e2e2e8;
+  line-height: 1.5;
+}
+.navScroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #44444c transparent;
+}
+.navGroup {
+  display: contents;
+}
+.navButton {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 9px 10px;
+  margin-bottom: 4px;
+  border-radius: 10px;
+  text-align: left;
+  color: #a3a3ad;
+  font:
+    400 13px/1.35 var(--font-dm-sans),
+    sans-serif;
+  cursor: pointer;
+  transition:
+    background 120ms,
+    color 120ms;
+}
+.navButton svg {
+  flex-shrink: 0;
+}
+.navButton:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #f0f0f3;
+}
+.navButton[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.14);
+  color: #eeeef0;
+  font-weight: 600;
+}
+.navButton[aria-pressed="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: #e9e9ef;
+}
+.navButton[data-settings="true"] {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  margin-top: 10px;
+  padding-top: 12px;
+}
+.navButton:focus-visible,
+.collapse:focus-visible,
+.brand:focus-visible {
+  outline: 2px solid #de91ac;
+  outline-offset: 2px;
+}
+.navigation[data-compact="true"] {
+  width: 72px;
+  padding: 16px 8px;
+}
+.navigation[data-compact="true"] .brandRow {
+  flex-direction: column;
+  gap: 8px;
+}
+.navigation[data-compact="true"] .brand > span,
+.navigation[data-compact="true"] .scope {
+  display: none;
+}
+.navigation[data-compact="true"] .navButton {
+  justify-content: center;
+  padding: 10px;
+  min-height: 40px;
+}
+.navigation[data-compact="true"] .navButton span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.surface {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: var(--workspace-panel-width);
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  background: #151518;
+  border-left: 1px solid #34343c;
+  opacity: 0;
+  transform: translateX(12px);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    visibility 180ms;
+  overflow: hidden;
+}
+.surface[data-active="true"] {
+  opacity: 1;
+  transform: translateX(0);
+  visibility: visible;
+  pointer-events: auto;
+}
+.panelBar {
+  height: 58px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px;
+  border-bottom: 1px solid #303038;
+}
+.panelBar h2 {
+  font-size: 14px;
+  letter-spacing: -0.01em;
+  font-weight: 500;
+  flex: 1;
+}
+.panelBar button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 7px;
+  color: #aaaab5;
+}
+.panelBar button:hover {
+  background: #33333b;
+  color: #fff;
+}
+.frame {
+  flex: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+  background: #0b0a09;
+}
+.frame[data-loaded="true"] {
+  opacity: 1;
+}
+.nativeBody {
+  padding: 20px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  flex: 1;
+  min-height: 0;
+}
+.loading {
+  position: absolute;
+  inset: 58px 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 12px;
+  color: #aaaab5;
+  pointer-events: none;
+}
+.loading svg {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 900px) {
+  .navigation,
+  .navigation[data-compact="true"] {
+    top: 62px;
+    left: 8px;
+    right: 8px;
+    bottom: auto;
+    width: auto;
+    height: 108px;
+    padding: 4px;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-auto-rows: 46px;
+    gap: 4px;
+    border: 1px solid #303035;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: none;
+  }
+  .brandRow,
+  .scope {
+    display: none !important;
+  }
+  .navScroll,
+  .navGroup {
+    display: contents;
+  }
+  .navButton,
+  .navigation[data-compact="true"] .navButton {
+    min-height: 46px;
+    width: 100%;
+    margin: 0;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    padding: 5px 2px;
+    border-radius: 8px;
+    font-size: 10px;
+    line-height: 1.1;
+  }
+  .navigation[data-compact="true"] .navButton span {
+    position: static;
+    width: auto;
+    height: auto;
+    clip-path: none;
+    overflow: visible;
+  }
+  .navButton svg {
+    width: 17px;
+    height: 17px;
+  }
+  .navButton[aria-pressed="true"] {
+    box-shadow: inset 0 -2px #eeeef0;
+  }
+  .navButton[data-settings="true"] {
+    border-top: 0;
+    margin-top: 0;
+  }
+  .navButton[aria-pressed="true"]::before {
+    display: none;
+  }
+  .surface {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: 58%;
+    border: 1px solid #3b3b43;
+    border-bottom: 0;
+    border-radius: 18px 18px 0 0;
+    transform: translateY(12px);
+    box-shadow: 0 -8px 30px #0002;
+  }
+  .surface[data-active="true"] {
+    transform: translateY(0);
+  }
+  .panelBar {
+    height: 48px;
+    padding: 0 14px;
+  }
+  .nativeBody {
+    padding: 14px;
+  }
+  .panelBar button {
+    width: 40px;
+    height: 40px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .surface,
+  .frame,
+  .navButton {
+    transition: none !important;
+    transform: none !important;
+  }
+  .loading svg {
+    animation: none;
+  }
+}
+:global([data-keyboard-motion="true"]) .surface,
+:global([data-keyboard-motion="true"]) .frame {
+  transition: none;
+}

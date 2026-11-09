@@ -1,0 +1,122 @@
+name: ci
+
+# Checks that run on every pull request and on every push to a branch other than main,
+# so a mistake is found BEFORE it is merged. None of these need a secret.
+#
+#   api     TypeScript typecheck of the API
+#   web     TypeScript typecheck + unit tests of the web app
+#   mobile  flutter analyze + flutter test of the phone app
+#   api-tests (off by default): the API's database tests; needs a TEST database. Turn on
+#           by setting the repo VARIABLE  API_TESTS=on  and the repo SECRET  TEST_DATABASE_URL
+#           (a throwaway Postgres, NEVER production — the tests create and drop their own schema).
+#
+# runs-on: android — the DOCKER runner the Android release also uses (no Node or Flutter
+# preinstalled, so each job installs what it needs). Same Forgejo quirks as the release
+# workflows: the repo is a pull MIRROR of GitHub, so a push shows up here only after the
+# mirror syncs; and the workflow file must exist on the commit being checked.
+
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    runs-on: android
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install and typecheck
+        working-directory: supabase/api
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run typecheck
+
+  web:
+    runs-on: android
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install, typecheck and test
+        working-directory: web
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npx tsc --noEmit -p .
+          npx vitest run
+
+  mobile:
+    runs-on: android
+    timeout-minutes: 40
+    env:
+      FLUTTER_VERSION: "3.44.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          set -euo pipefail
+          APT_OPTS="-o Acquire::ForceIPv4=true -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          for attempt in 1 2 3; do
+            if timeout 600 apt-get $APT_OPTS update -qq && timeout 900 apt-get $APT_OPTS install -y -qq --no-install-recommends unzip xz-utils curl git ca-certificates; then break; fi
+            [ "$attempt" = 3 ] && { echo "::error::apt failed 3 times" >&2; exit 1; }
+            sleep $((attempt * 30))
+          done
+      - name: Compute the cache week
+        id: week
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+      - name: Restore Flutter SDK and pub cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/flutter
+            ~/.pub-cache
+          key: ci-flutter-${{ env.FLUTTER_VERSION }}-${{ steps.week.outputs.week }}-${{ hashFiles('mobile/pubspec.lock') }}
+          restore-keys: |
+            ci-flutter-${{ env.FLUTTER_VERSION }}-${{ steps.week.outputs.week }}-
+      - name: Install Flutter
+        run: |
+          set -euo pipefail
+          if [ ! -d "$HOME/flutter/.git" ]; then
+            git clone https://github.com/flutter/flutter.git -b "$FLUTTER_VERSION" --depth 1 "$HOME/flutter"
+          fi
+          echo "$HOME/flutter/bin" >> "$GITHUB_PATH"
+      # mobile/.env is gitignored but is a declared Flutter asset.
+      - name: Analyze and test
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          [ -f .env ] || cp .env.example .env
+          flutter pub get
+          flutter analyze lib
+          flutter test
+
+  api-tests:
+    if: ${{ vars.API_TESTS == 'on' }}
+    runs-on: android
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: API tests against the TEST database
+        working-directory: supabase/api
+        env:
+          DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          [ -n "${DATABASE_URL:-}" ] || { echo "::error::Set the TEST_DATABASE_URL secret (a throwaway database, never production)." >&2; exit 1; }
+          npm ci --no-audit --no-fund
+          npm test

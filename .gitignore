@@ -1,0 +1,69 @@
+1# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Builds
+dist/
+build/
+.next/
+out/
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+mobile/build/
+mobile/ios/Pods/
+mobile/ios/.symlinks/
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/android/key.properties
+*.iml
+
+# Env / secrets
+.env
+.env.local
+.env.test
+.env.*.local
+!.env.example
+
+# Supabase
+supabase/.branches
+supabase/.temp
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local-only scratch scripts (never committed — see daily log / session notes
+# for why: some contain hardcoded local paths or credentials)
+supabase/api/apply-all.mjs
+supabase/api/check.cjs
+supabase/api/fix_schema.sql
+supabase/api/fix-receipts.cjs
+check-schema.cjs
+playground.txt
+
+# Claude Code local settings (machine-specific)
+.claude/settings.local.json
+
+# Flutter-generated Linux plugin registrant header — regenerated per-build,
+# same reasoning as .flutter-plugins above; untracked via git rm --cached.
+mobile/linux/flutter/generated_plugin_registrant.h
+
+# Written by supabase/api/get-drive-refresh-token.mjs: contains Google secrets, delete after use
+supabase/api/drive-oauth.out.txt
+
+/web/.next-local/
