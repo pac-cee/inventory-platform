@@ -1,1 +1,0 @@
-DELETE FROM auth.users WHERE email LIKE 'perf-probe-%';
