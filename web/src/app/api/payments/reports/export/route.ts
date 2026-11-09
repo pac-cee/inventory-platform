@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAccessToken } from "@/lib/session";
+import { MOCK, mockLedgerCsv } from "@/lib/api/mock";
 
 const API_URL = process.env.API_URL ?? "http://localhost:4000";
 
@@ -9,11 +10,13 @@ export async function GET() {
     const headers: Record<string, string> = {};
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const res = await fetch(`${API_URL}/payments/reports/export`, {
-      method: "GET",
-      headers,
-      cache: "no-store",
-    });
+    const res = MOCK
+      ? new Response(mockLedgerCsv())
+      : await fetch(`${API_URL}/payments/reports/export`, {
+          method: "GET",
+          headers,
+          cache: "no-store",
+        });
 
     if (!res.ok) {
       return NextResponse.json(

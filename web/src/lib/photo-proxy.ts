@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAccessToken } from "@/lib/session";
+import { MOCK } from "@/lib/api/mock";
 
 const API_URL = process.env.API_URL ?? "http://localhost:4000";
 
@@ -12,6 +13,7 @@ const API_URL = process.env.API_URL ?? "http://localhost:4000";
  * this server fetch someone else's host and stream it back.
  */
 export async function proxyPhoto(kind: "items" | "locations", id: string): Promise<Response> {
+  if (MOCK) return NextResponse.json({ error: "No photo." }, { status: 404 });
   try {
     const token = await getAccessToken();
     const headers: Record<string, string> = {};

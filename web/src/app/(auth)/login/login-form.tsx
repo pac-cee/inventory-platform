@@ -12,9 +12,12 @@ import { login, type AuthFormState } from "../actions";
 export function LoginForm({
   error,
   message,
+  demo,
 }: {
   error?: string;
   message?: string;
+  /** Mock mode: prefilled sign-in, since any credentials work. */
+  demo?: { email: string; password: string };
 }) {
   const [state, formAction, pending] = useActionState<AuthFormState, FormData>(
     login,
@@ -55,6 +58,7 @@ export function LoginForm({
               name="email"
               type="email"
               placeholder="you@example.com"
+              defaultValue={demo?.email}
               required
               autoComplete="username"
               autoCapitalize="none"
@@ -70,6 +74,7 @@ export function LoginForm({
                 name="password"
                 type={showPassword ? "text" : "password"}
                 placeholder="Enter your password"
+                defaultValue={demo?.password}
                 required
                 autoComplete="current-password"
                 className="h-10 pr-12"

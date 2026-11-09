@@ -1,5 +1,6 @@
 import "server-only";
 import { getAccessToken } from "@/lib/session";
+import { MOCK, MockError, mockRequest } from "@/lib/api/mock";
 
 const API_URL = process.env.API_URL ?? "http://localhost:4000";
 
@@ -31,6 +32,15 @@ export async function apiRequest<T = unknown>(
   path: string,
   { method = "GET", body, token, revalidate }: RequestOptions = {},
 ): Promise<T> {
+  if (MOCK) {
+    try {
+      return await mockRequest<T>(method, path, body);
+    } catch (err) {
+      if (err instanceof MockError) throw new ApiError(err.status, err.message);
+      throw err;
+    }
+  }
+
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (token) headers["Authorization"] = `Bearer ${token}`;

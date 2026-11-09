@@ -1,5 +1,26 @@
 # Internal Inventory App
 
+## Try the UI with no backend
+
+This branch runs the whole web app on mock data: no database, no API, no `.env`.
+
+```bash
+cd web
+npm install
+npm run dev        # http://localhost:3000
+```
+
+Sign in with the prefilled details (any email and password work). Every screen
+has demo data: the 3D office map, catalog, locations, borrowed equipment,
+payments and reports. Adding, editing and deleting items, locations and people
+works for as long as the server runs; stock actions (take, return, transfer)
+succeed but don't change the counts. Restarting the server resets everything.
+
+Mock mode is on whenever `API_URL` is unset. Set `API_URL` to a running
+inventory-api to use real data, or force either way with `MOCK_API=1` / `MOCK_API=0`.
+It deploys as-is to any Next.js host (Vercel, Railway) with no environment variables.
+The recorded responses live in `web/src/lib/api/mock/fixtures.json`.
+
 Verlet Robotics' internal system for tracking stock (who took what, when, and
 current counts across locations) and for running employee corporate-expense
 requests that disburse via the MTN MoMo API. It ships as a web dashboard and a

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAccessToken } from "@/lib/session";
 import { ApiError } from "@/lib/api/server";
+import { MOCK } from "@/lib/api/mock";
 
 const API_URL = process.env.API_URL ?? "http://localhost:4000";
 
@@ -14,7 +15,8 @@ export async function PATCH(
     
     // Parse incoming multipart/form-data
     const formData = await request.formData();
-    
+    if (MOCK) return NextResponse.json({ ok: true, message: "Receipt saved." });
+
     // Proxy the exact same FormData to the Express backend
     const res = await fetch(`${API_URL}/payments/transactions/${id}/receipt`, {
       method: "PATCH",
