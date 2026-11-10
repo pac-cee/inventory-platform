@@ -10,7 +10,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import * as T from "./textures.js";
-import { kitGeometry, avatarGeometry, shirtGeometry, KINDS } from "./kit.js";
+import { kitGeometry, KINDS } from "./kit.js";
 import { RACKS, BAYS, LEVELS, SIDES, KIT } from "./data.js";
 import { TOWER, BELOW, ABOVE, GROUND_Y, CEILING, AREA, GRID, COLUMN, DOOR, LIFTS, WALKWAY_Z, ROOMS, SHELVING, TREES } from "./site.js";
 
@@ -406,36 +406,16 @@ export function createScene(canvas, hooks) {
     }
     for (const mesh of Object.values(kitMeshes)) { mesh.visible = mesh.count > 0; mesh.instanceMatrix.needsUpdate = true; mesh.instanceColor.needsUpdate = true; mesh.computeBoundingSphere(); }
     if (outlinePiece) placeOutline(outlinePiece);
-    layoutAvatars();
     needsRender = true;
   }
 
-  // ---- people ---------------------------------------------------------------------------
-  const avatarMesh = shade(new THREE.InstancedMesh(avatarGeometry(), kitMat, 32));
-  const shirtMesh = shade(new THREE.InstancedMesh(shirtGeometry(), kitMat, 32));
-  shirtMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(32 * 3).fill(1), 3);
-  avatarMesh.count = shirtMesh.count = 0; avatarMesh.userData.slots = []; shirtMesh.userData.slots = [];
-  scene.add(avatarMesh, shirtMesh);
-  const PALETTE = ["#ff5c95", "#7cb7ff", "#e6b44a", "#5fbf7f", "#c79bff", "#ff8a5c", "#59d0c8"];
+  // ---- people: no figures on the floor; a person's spot only aims the camera at their desk ----
   function avatarSpot(p) {
     const desk = pieces.find((pc) => pc.kind === "workstation" && pc.owner === p.id && pc.dept === p.dept);
     if (desk) { const w = pieceWorld(desk); if (!w) return null; const lx = -0.2, lz = 0.85; return { x: w.x + lx * Math.cos(w.rot) + lz * Math.sin(w.rot), z: w.z - lx * Math.sin(w.rot) + lz * Math.cos(w.rot), rot: w.rot + Math.PI, b: w.b }; }
     const d = deptOf.get(p.dept), b = d && byB.get(d.building); if (!b) return null;
     const k = people.filter((x) => x.dept === p.dept).indexOf(p);
     return { x: b.x - b.w / 2 + 1.2 + k * 0.8, z: b.z + (b.z < WALKWAY_Z ? b.d / 2 - 0.8 : -b.d / 2 + 0.8), rot: 0, b };
-  }
-  function layoutAvatars() {
-    avatarMesh.count = shirtMesh.count = 0; avatarMesh.userData.slots = []; shirtMesh.userData.slots = [];
-    people.forEach((p, k) => {
-      const s = avatarSpot(p); if (!s) return;
-      const i = avatarMesh.count++; shirtMesh.count++;
-      avatarMesh.userData.slots[i] = shirtMesh.userData.slots[i] = p.id;
-      const m = compose(s.x, 0, s.z, 1, 1, 1, s.rot);
-      avatarMesh.setMatrixAt(i, m); shirtMesh.setMatrixAt(i, m);
-      shirtMesh.setColorAt(i, new THREE.Color(PALETTE[k % PALETTE.length]).multiplyScalar(hover?.type === "person" && hover.id === p.id ? 1.35 : 0.9));
-    });
-    for (const mm of [avatarMesh, shirtMesh]) { mm.instanceMatrix.needsUpdate = true; mm.computeBoundingSphere(); }
-    shirtMesh.instanceColor.needsUpdate = true;
   }
 
   // ---- overlays -------------------------------------------------------------------------
@@ -544,7 +524,7 @@ export function createScene(canvas, hooks) {
     for (const mesh of [storeyMesh, bandMesh, roofMesh, facadeMesh, ceilMesh, beamMesh, ledMesh]) { mesh.instanceMatrix.needsUpdate = true; mesh.computeBoundingSphere(); }
     zoneMat.uniforms.uT.value = smooth(0.5, 1, o);
     const inside = o > 0.02;
-    for (const obj of [vFloor, wallMesh, colMesh, partMesh, mullMesh, louvreMesh, posts, boards, backs, cardMesh, trayMesh, labels, avatarMesh, shirtMesh, bulkMesh, ...Object.values(kitMeshes)]) obj.visible = inside || o > 0 || obj === vFloor ? inside : false;
+    for (const obj of [vFloor, wallMesh, colMesh, partMesh, mullMesh, louvreMesh, posts, boards, backs, cardMesh, trayMesh, labels, bulkMesh, ...Object.values(kitMeshes)]) obj.visible = inside || o > 0 || obj === vFloor ? inside : false;
     for (const mesh of Object.values(kitMeshes)) if (inside) mesh.visible = mesh.count > 0;
     return true;
   }
@@ -559,11 +539,10 @@ export function createScene(canvas, hooks) {
       const hit = ray.intersectObjects([storeyMesh, bandMesh, roofMesh, facadeMesh, verletBand], false)[0];
       return hit ? { type: "tower" } : null;
     }
-    const targets = [cardMesh, trayMesh, avatarMesh, shirtMesh, ...Object.values(kitMeshes).filter((m) => m.visible), zoneMesh];
+    const targets = [cardMesh, trayMesh, ...Object.values(kitMeshes).filter((m) => m.visible), zoneMesh];
     for (const h of ray.intersectObjects(targets, false)) {
       const o = h.object;
       if (o === cardMesh || o === trayMesh) { const b = (o === cardMesh ? cardBins : trayBins)[h.instanceId]; if (b?.visible) return { type: "bin", id: b.id }; continue; }
-      if (o === avatarMesh || o === shirtMesh) return { type: "person", id: o.userData.slots[h.instanceId] };
       if (o.userData.slots) return { type: "piece", id: o.userData.slots[h.instanceId] };
       if (o === zoneMesh) return { type: "building", id: B[h.instanceId].id };
     }

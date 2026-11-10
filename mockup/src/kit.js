@@ -170,26 +170,6 @@ const BUILD = {
   },
 };
 
-/** Person: neutral base (legs, shoes, head, hair) + a shirt tinted per person. */
-export function avatarGeometry() {
-  return merge([
-    box(0.13, 0.82, 0.16, "#2f3640", -0.085, 0.04, 0), box(0.13, 0.82, 0.16, "#2f3640", 0.085, 0.04, 0),
-    box(0.15, 0.06, 0.26, "#1a1b1e", -0.085, 0, 0.04), box(0.15, 0.06, 0.26, "#1a1b1e", 0.085, 0, 0.04),
-    cyl(0.055, 0.1, "#b98a68", 0, 1.43, 0, 10),
-    part(new THREE.SphereGeometry(0.115, 16, 12), "#b98a68", 0, 1.62, 0),
-    part(new THREE.SphereGeometry(0.12, 16, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), "#1d1714", 0, 1.64, -0.01),
-    part(new THREE.SphereGeometry(0.045, 8, 6), "#b98a68", -0.25, 0.86, 0.02), part(new THREE.SphereGeometry(0.045, 8, 6), "#b98a68", 0.25, 0.86, 0.02),
-  ]);
-}
-export function shirtGeometry() {
-  return merge([
-    part(new THREE.CylinderGeometry(0.17, 0.15, 0.6, 14), "#ffffff", 0, 1.16, 0),
-    part(new THREE.SphereGeometry(0.17, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2), "#ffffff", 0, 1.43, 0),
-    part(new THREE.CylinderGeometry(0.05, 0.045, 0.56, 8), "#ffffff", -0.23, 1.15, 0.01, 0, 0, 0.12),
-    part(new THREE.CylinderGeometry(0.05, 0.045, 0.56, 8), "#ffffff", 0.23, 1.15, 0.01, 0, 0, -0.12),
-  ]);
-}
-
 const cache = {};
 export function kitGeometry(kind) { return (cache[kind] ||= BUILD[kind]()); }
 export const KINDS = Object.keys(BUILD);

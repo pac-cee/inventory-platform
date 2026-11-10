@@ -52,7 +52,7 @@ Matching the real campus means editing that file, not the scene code.
 - `src/site.js` — buildings, paths, trees, parking
 - `src/data.js` — store, permissions, departments and layouts, stock and payment rules
 - `src/scene.js` — Three.js campus: buildings and transitions, warehouse racks, instanced
-  furniture and people, routes, drag editing, render-on-demand
+  furniture, routes, drag editing, render-on-demand
 - `src/kit.js` — furniture kit as merged vertex-coloured geometry (one draw call per kind)
 - `src/textures.js` — procedural concrete, cardboard, steel, brick, render, grass, site plan, labels
 - `src/main.js` — sign-in, chapters, panels, edit mode, search, overlays
