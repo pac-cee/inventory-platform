@@ -260,17 +260,21 @@ export function SpatialWorkspace({
   useEffect(() => {
     // Browser-only persistence is synchronized after hydration.
     try {
+      // Only replace state that was actually saved: a new but empty object
+      // would rebuild the whole 3D scene for nothing on every load.
+      const saved = readLayout(localStorage.getItem(storageKey));
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setLayout(readLayout(localStorage.getItem(storageKey)));
+      if (Object.keys(saved).length) setLayout(saved);
       const removed = JSON.parse(
         localStorage.getItem(`${storageKey}:hidden`) ?? "[]",
       );
-      if (Array.isArray(removed))
+      if (Array.isArray(removed) && removed.length)
         setHidden(removed.filter((id: unknown) => typeof id === "string"));
       const draft = readDraft(localStorage.getItem(`${storageKey}:draft`));
-      setExtras(draft.extras);
-      setItemEdits(draft.items);
-      setBoxMap(readBoxes(localStorage.getItem(`${storageKey}:boxes`)));
+      if (draft.extras.length) setExtras(draft.extras);
+      if (Object.keys(draft.items).length) setItemEdits(draft.items);
+      const boxes = readBoxes(localStorage.getItem(`${storageKey}:boxes`));
+      if (Object.keys(boxes).length) setBoxMap(boxes);
     } catch {
       /* Storage can be disabled. */
     }

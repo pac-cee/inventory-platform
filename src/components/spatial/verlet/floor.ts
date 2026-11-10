@@ -116,7 +116,8 @@ function worldUV(material: THREE.MeshStandardMaterial, mode: "floor" | "wall", t
 
 /** A sky to sit behind everything: gradient with a soft sun glow, as an equirect map. */
 export function skyTexture() {
-  const W = 512, H = 256;
+  // A soft gradient: a small map looks the same and draws 4× faster at start-up.
+  const W = 256, H = 128;
   const canvas = document.createElement("canvas");
   canvas.width = W;
   canvas.height = H;
