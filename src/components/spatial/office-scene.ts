@@ -50,7 +50,7 @@ export function createOffice(
   select: (id: string, boxId?: string) => void,
 ) {
   const scene = new THREE.Scene();
-  // Verlet's floor from the 3D floor site, high up in its office block.
+  // Verlet's floor from the 3D floor site, on its own as a floor model.
   const sky = skyTexture();
   scene.background = sky;
   scene.fog = new THREE.Fog(SKY.horizon, 90, 300);
@@ -85,7 +85,7 @@ export function createOffice(
   controls.minDistance = 0.45;
   controls.maxDistance = clampZoomDistance(Infinity);
   controls.minPolarAngle = 0.01;
-  // Stay above street level; only Inspect box (an isolated box) orbits fully.
+  // Stay above the floor; only Inspect box (an isolated box) orbits fully.
   const ABOVE_GROUND = Math.PI * 0.47;
   controls.maxPolarAngle = ABOVE_GROUND;
   controls.minAzimuthAngle = -Infinity;
