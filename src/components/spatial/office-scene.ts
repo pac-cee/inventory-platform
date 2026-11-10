@@ -85,7 +85,9 @@ export function createOffice(
   controls.minDistance = 0.45;
   controls.maxDistance = clampZoomDistance(Infinity);
   controls.minPolarAngle = 0.01;
-  controls.maxPolarAngle = Math.PI - 0.01;
+  // Stay above street level; only Inspect box (an isolated box) orbits fully.
+  const ABOVE_GROUND = Math.PI * 0.47;
+  controls.maxPolarAngle = ABOVE_GROUND;
   controls.minAzimuthAngle = -Infinity;
   controls.maxAzimuthAngle = Infinity;
   controls.update();
@@ -667,6 +669,7 @@ export function createOffice(
     });
     visibility.clear();
     isolatedId = null;
+    controls.maxPolarAngle = ABOVE_GROUND;
     const source = id ? (packages.get(id) ?? groups.get(id)) : undefined;
     if (!source) return;
     scene.children.forEach((object) => {
@@ -682,6 +685,7 @@ export function createOffice(
     inspection.visible = true;
     scene.add(inspection);
     isolatedId = id;
+    controls.maxPolarAngle = Math.PI - 0.01;
   }
   let flight: {
     start: number;

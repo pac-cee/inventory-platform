@@ -39,8 +39,12 @@ export const SUN_DIRECTION = (() => {
 export const SKY = { top: "#4a6687", horizon: "#d9c8b4", ground: "#a99a8c" };
 
 // ---- site, from mockup/src/site.js (hall coordinates, metres) ----------------
+// The building is Umuyenzi Plaza, 42 KN 5 Rd, Remera, Kigali (Google Maps
+// listing "Verlet Robotics Rwanda"; Street View Feb 2023): shops on the
+// ground floor, three floors above, Verlet on the 2nd. The outline is still
+// the estimated floor plate; the facade follows the photos.
 const FH = 3.8;
-const BELOW = 4;
+const BELOW = 2;
 const GROUND_Y = -BELOW * FH;
 const PL = { x0: -18.5, x1: 42.5, z0: -12.5, z1: 12.5 };
 const PW = PL.x1 - PL.x0,
@@ -50,10 +54,8 @@ const PW = PL.x1 - PL.x0,
 const DOOR = { z: -1.5, w: 2.0 };
 const LIFTS = { x: 31, z: -1.5 };
 const STREET = { z: 24, width: 10 };
-const TREES = [
-  [-26, 20], [-12, 20.5], [2, 20], [18, 20.5], [32, 20],
-  [48, 20.5], [-28, 4], [52, 2], [-28, -14], [52, -14],
-];
+/** Leafy trees behind and beside the block; the street side has palms. */
+const TREES = [[-28, 4], [52, 2], [-28, -14], [52, -14], [-10, -24], [20, -25]];
 
 function hash(i: number) {
   const x = Math.sin(i * 127.1 + 311.7) * 43758.5453;
@@ -245,13 +247,13 @@ export function createVerletFloor() {
     ground.position.set(PCX, GROUND_Y - 0.02, PCZ);
     ground.receiveShadow = true;
     group.add(ground);
-    const SB = { x0: PL.x0 - 40, x1: PL.x1 + 40, z0: PL.z0 - 20, z1: STREET.z + 12 };
+    const road = { x0: PL.x0 - 40, x1: PL.x1 + 40, z0: PL.z0 - 20, z1: STREET.z + 12 };
     const street = new THREE.Mesh(
-      new THREE.PlaneGeometry(SB.x1 - SB.x0, SB.z1 - SB.z0),
-      new THREE.MeshStandardMaterial({ map: T.streetDecals(SB, PL, STREET), transparent: true, roughness: 0.9, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }),
+      new THREE.PlaneGeometry(road.x1 - road.x0, road.z1 - road.z0),
+      new THREE.MeshStandardMaterial({ map: T.streetDecals(road, PL, STREET), transparent: true, roughness: 0.9, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1 }),
     );
     street.rotation.x = -Math.PI / 2;
-    street.position.set((SB.x0 + SB.x1) / 2, GROUND_Y - 0.005, (SB.z0 + SB.z1) / 2);
+    street.position.set((road.x0 + road.x1) / 2, GROUND_Y - 0.005, (road.z0 + road.z1) / 2);
     street.receiveShadow = true;
     group.add(street);
     TREES.forEach(([x, z], i) => {
@@ -282,26 +284,93 @@ export function createVerletFloor() {
     });
   }
 
-  // ---- the block: storeys below Verlet's as glass boxes with slab bands ------------
-  const curtain: THREE.BufferGeometry[] = [];
-  for (let k = -BELOW; k <= 0; k++) {
-    P(box(PW + 0.4, 0.4, PD + 0.4, PCX, k * FH - 0.2, PCZ), "#d9d6cf");
-    if (k < 0) curtain.push(box(PW, FH - 0.4, PD, PCX, k * FH + FH / 2, PCZ));
-  }
-  P(box(10, 0.3, 3.5, LIFTS.x, GROUND_Y + 3.4, PL.z1 + 1.7), ALUM, 0.7, 0.35);
-  // Verlet's storey: full-height glazing on the far sides, sill height on the near
-  // ones so the floor stays visible from the usual camera angles.
-  for (const side of ["north", "south", "west", "east"] as const) {
-    const alongX = side === "north" || side === "south";
-    const len = alongX ? PW : PD, n = Math.round(len / 3);
-    const h = side === "north" || side === "west" ? FH - 0.4 : 1.0;
-    for (let i = 0; i < n; i++) {
-      const t = (alongX ? PL.x0 : PL.z0) + (i + 0.5) * (len / n);
-      const x = alongX ? t : side === "west" ? PL.x0 : PL.x1;
-      const z = alongX ? (side === "north" ? PL.z0 : PL.z1) : t;
-      curtain.push(box(alongX ? len / n - 0.02 : 0.12, h, alongX ? 0.12 : len / n - 0.02, x, h / 2 - 0.2, z));
+  // ---- KN 5 Rd: a dual carriageway with a planted median, palms either side ------
+  const SB = { x0: PL.x0 - 40, x1: PL.x1 + 40 };
+  P(box(SB.x1 - SB.x0, 0.18, 1.6, (SB.x0 + SB.x1) / 2, GROUND_Y + 0.09, STREET.z), "#a3a09a");
+  P(box(SB.x1 - SB.x0, 0.03, 1.3, (SB.x0 + SB.x1) / 2, GROUND_Y + 0.195, STREET.z), "#5f8240");
+  /** A royal palm: a tall pale trunk and a crown of drooping fronds. */
+  function palm(x: number, z: number, i: number) {
+    const s = 0.85 + hash(i + 17) * 0.35, h = 7.5 * s, lean = (hash(i + 5) - 0.5) * 0.08;
+    P(placed(new THREE.CylinderGeometry(0.15, 0.24, h, 8), x, GROUND_Y + h / 2, z, 0, 1, 1, 1, lean), "#9b8f7b");
+    P(placed(new THREE.CylinderGeometry(0.2, 0.17, 1.1, 8), x, GROUND_Y + h + 0.3, z), "#6f8a4a");
+    for (let f = 0; f < 9; f++) {
+      const yaw = f * 0.698 + hash(i + f) * 0.4, droop = 0.25 + hash(i * 3 + f) * 0.45, r = 1.7 * s;
+      const cx = Math.sin(yaw) * Math.cos(droop) * r, cy = -Math.sin(droop) * r, cz = Math.cos(yaw) * Math.cos(droop) * r;
+      P(placed(new THREE.SphereGeometry(1, 8, 6), x + cx, GROUND_Y + h + 0.8 + cy * 0.6, z + cz, yaw, 0.32 * s, 0.05 * s, 1.9 * s, droop), f % 2 ? "#4f7a35" : "#5f8d3f");
     }
   }
+  let palms = 0;
+  for (let x = SB.x0 + 5; x < SB.x1 - 4; x += 9) palm(x, STREET.z, palms++);
+  for (let x = PL.x0 - 6; x < PL.x1 + 8; x += 10) palm(x + 2, 17.6, palms++);
+
+  // ---- the block: Umuyenzi Plaza --------------------------------------------------
+  // Ground-floor shops under a long green canopy; above them ochre-rendered
+  // wings with balconies either side of a bowed glass curtain wall. The floors
+  // above Verlet's are left off so the floor stays visible.
+  const OCHRE = "#cfa65e", OCHRE_DARK = "#b48a46", SLAB = "#dcd8cf", RAIL = "#8f969c";
+  const GLASS = { x0: 4, x1: 26 };
+  /** How far the curved glass centre bows out towards the street. */
+  const bow = (x: number) => {
+    const t = (x - GLASS.x0) / (GLASS.x1 - GLASS.x0);
+    return t > 0 && t < 1 ? Math.sin(t * Math.PI) * 1.4 : 0;
+  };
+  const curtain: THREE.BufferGeometry[] = [];
+  /** Window bands with piers on a rendered face. */
+  function windows(x0: number, x1: number, z: number, y0: number, alongZ = false) {
+    for (let t = x0 + 0.5; t + 2.2 <= x1 - 0.3; t += 3) {
+      curtain.push(alongZ ? box(0.06, 1.7, 2.2, z, y0 + 1.75, t + 1.1) : box(2.2, 1.7, 0.06, t + 1.1, y0 + 1.75, z));
+    }
+  }
+  /** A balcony at floor level: slab, steel rails and end posts. */
+  function balcony(cx: number, y0: number) {
+    const z = PL.z1 + 0.6;
+    P(box(2.6, 0.12, 1.2, cx, y0 + 0.06, z), SLAB);
+    for (const yy of [0.45, 0.75, 1.05]) P(box(2.6, 0.04, 0.04, cx, y0 + yy, z + 0.58), RAIL, 0.6, 0.4);
+    for (const dx of [-1.28, 1.28]) {
+      P(box(0.04, 0.04, 1.2, cx + dx, y0 + 1.05, z), RAIL, 0.6, 0.4);
+      P(box(0.05, 1.05, 0.05, cx + dx, y0 + 0.55, z + 0.58), RAIL, 0.6, 0.4);
+    }
+  }
+  /** The street face of one upper floor: wings, bowed glass and balconies. */
+  function streetFace(y0: number, h: number, withBalconies: boolean) {
+    for (const [a, b] of [[PL.x0, GLASS.x0], [GLASS.x1, PL.x1]]) {
+      P(box(b - a, h, 0.3, (a + b) / 2, y0 + h / 2, PL.z1 - 0.15), OCHRE);
+      if (h > 2) windows(a, b, PL.z1 + 0.02, y0);
+      if (withBalconies) for (let x = a + 3.5; x < b - 2; x += 6) balcony(x, y0);
+    }
+    // the bowed glass centre, in 1.5 m panels following the curve
+    for (let x = GLASS.x0; x < GLASS.x1 - 0.01; x += 1.5) {
+      const za = PL.z1 + bow(x), zb = PL.z1 + bow(x + 1.5);
+      curtain.push(box(1.52, h, 0.08, x + 0.75, y0 + h / 2, (za + zb) / 2, -Math.atan2(zb - za, 1.5)));
+    }
+  }
+  for (let k = -BELOW; k <= 0; k++) P(box(PW + 0.4, 0.4, PD + 0.4, PCX, k * FH - 0.2, PCZ), SLAB);
+  for (let k = -BELOW; k < 0; k++) {
+    const y0 = k * FH, h = FH - 0.4;
+    // rendered west, east and north faces with window bands
+    P(box(0.3, h, PD, PL.x0 + 0.15, y0 + h / 2, PCZ), OCHRE);
+    P(box(0.3, h, PD, PL.x1 - 0.15, y0 + h / 2, PCZ), OCHRE);
+    P(box(PW, h, 0.3, PCX, y0 + h / 2, PL.z0 + 0.15), OCHRE);
+    windows(PL.z0, PL.z1, PL.x0 - 0.02, y0, true);
+    windows(PL.z0, PL.z1, PL.x1 + 0.02, y0, true);
+    windows(PL.x0, PL.x1, PL.z0 - 0.02, y0);
+    if (k === -BELOW) {
+      // shopfronts between piers, under a long green canopy with sign panels
+      for (let x = PL.x0; x <= PL.x1 + 0.01; x += 4) P(box(0.45, h, 0.45, x, y0 + h / 2, PL.z1 - 0.1), OCHRE_DARK);
+      for (let x = PL.x0 + 0.25; x < PL.x1 - 0.2; x += 4) curtain.push(box(3.5, 2.9, 0.08, x + 1.75, y0 + 1.45, PL.z1 - 0.3));
+      P(box(PW + 1, 0.16, 2.6, PCX, y0 + 3.1, PL.z1 + 1.3), "#2f5a3c");
+      P(box(PW + 1, 0.42, 0.08, PCX, y0 + 3.3, PL.z1 + 2.6), "#24482f");
+      const signs = ["#1f6f8b", "#ece7da", "#7a2531", "#2b4f8a", "#e2b33c", "#ece7da"];
+      for (let i = 0; i < 10; i++) P(box(3.2, 0.5, 0.06, PL.x0 + 3 + i * 6, y0 + 3.25, PL.z1 + 2.66), signs[i % signs.length]);
+      for (let x = PL.x0 + 2; x < PL.x1; x += 8) P(box(0.1, 3.0, 0.1, x, y0 + 1.5, PL.z1 + 2.45), "#3a3d40", 0.5, 0.4);
+    } else streetFace(y0, h, true);
+  }
+  // Verlet's floor: rendered at full height on the far sides, the street and
+  // east faces at sill height so the floor stays visible from the usual views.
+  P(box(0.3, FH - 0.4, PD, PL.x0 + 0.15, (FH - 0.4) / 2, PCZ), OCHRE);
+  P(box(PW, FH - 0.4, 0.3, PCX, (FH - 0.4) / 2, PL.z0 + 0.15), OCHRE);
+  P(box(0.3, 1.0, PD, PL.x1 - 0.15, 0.5, PCZ), OCHRE);
+  streetFace(0, 1.0, true);
   bake(curtain, curtainMat, false, false);
   bake([box(AREA.x1 - AREA.x0 + 0.4, 0.22, 0.3, (AREA.x0 + AREA.x1) / 2, -0.06, PL.z1 + 0.05)], pinkMat, false, false);
 
