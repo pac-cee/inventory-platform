@@ -10,6 +10,8 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { kitGeometry } from "./verlet/kit.js";
+import { ENTRANCE } from "@/lib/spatial/verlet-site";
 import {
   createVerletFloor,
   skyTexture,
@@ -26,6 +28,21 @@ import {
 } from "@/lib/spatial/camera";
 import type { FloorPoint } from "@/lib/spatial/directions";
 import { type SpatialShelf } from "@/lib/spatial/model";
+
+/** Inventory shelves are drawn as the stockroom's pine units: 2 m wide, four
+ *  boxes per level (the slot order matches lib/spatial/box-placement). */
+const SHELF = {
+  w: 2.0,
+  d: 0.5,
+  base: 0.12,
+  pitch: 0.58,
+  colStep: 0.5,
+  boxW: 0.42,
+  boxH: 0.38,
+  boxD: 0.4,
+  colX: (col: number) => -0.75 + col * 0.5,
+  boxY: (level: number) => 0.12 + 0.03 + level * 0.58 + 0.38 / 2,
+};
 
 export function createOffice(
   host: HTMLDivElement,
@@ -165,7 +182,6 @@ export function createOffice(
 
   // One material per surface type; colour comes from the vertices, so each
   // shelf, wall or plant is a single draw call however many parts it has.
-  const paint = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.84, metalness: 0 });
   const kraft = new THREE.MeshStandardMaterial({ vertexColors: true, map: kraftMap, roughness: 0.92 });
   // Racks and tables: steel and plywood in one mesh. A per-vertex "surface"
   // attribute (metalness, roughness) picks steel or wood, and only wood takes
@@ -318,95 +334,20 @@ export function createOffice(
     return mesh;
   }
 
-  // ---- the old office map's room (racks, tables, glass partition, plants,
-  // entrance marker, floor labels). Hidden: the map shows only the Verlet
-  // floor from the 3D floor site. Set SHOW_OLD_FLOOR to true to bring it back;
-  // inventory, boxes and locations data are unaffected either way.
-  const SHOW_OLD_FLOOR = false;
-  const oldFloor = new THREE.Group();
-  oldFloor.visible = SHOW_OLD_FLOOR;
-  scene.add(oldFloor);
-  const shell: THREE.BufferGeometry[] = [];
-  // Glass partition frames, with a walk-through opening.
-  for (const x of [-6.5, -2.5])
-    for (const dx of [-1.75, 1.75]) shell.push(slab(0.05, 2.2, 0.08, "#7e8c83", x + dx, 1.1, 0.8));
-  for (const x of [-6.5, -2.5]) shell.push(slab(3.55, 0.05, 0.09, "#7e8c83", x, 2.18, 0.8));
-
-  // Plants: tapered pot, soil, and a fan of long leaves.
-  function plant(x: number, z: number) {
-    shell.push(
-      part(new THREE.CylinderGeometry(0.34, 0.25, 0.62, 20), "#d4d3c9", x, 0.31, z),
-      part(new THREE.CylinderGeometry(0.355, 0.34, 0.05, 20), "#c2c1b6", x, 0.62, z),
-      part(new THREE.CylinderGeometry(0.31, 0.31, 0.02, 16), "#4a3b2e", x, 0.6, z),
-    );
-    const n = 15;
-    for (let i = 0; i < n; i++) {
-      const a = i * 2.39996 + x;
-      const tilt = 0.18 + (i / n) * 0.62;
-      const length = 1.25 - (i / n) * 0.55 + rand() * 0.15;
-      const dir = new THREE.Vector3(
-        Math.sin(tilt) * Math.sin(a),
-        Math.cos(tilt),
-        Math.sin(tilt) * Math.cos(a),
-      );
-      const c = dir.multiplyScalar(length / 2);
-      shell.push(
-        part(
-          new THREE.SphereGeometry(1, 10, 8),
-          i % 3 === 0 ? "#6f9174" : i % 3 === 1 ? "#4a6e55" : "#3d5f48",
-          x + c.x,
-          0.62 + c.y,
-          z + c.z,
-          tilt,
-          a,
-          0,
-          0.075,
-          length / 2,
-          0.022,
-        ),
-      );
-    }
-  }
-  plant(-8.8, 5.7);
-  plant(8.8, -5.7);
-  plant(8.8, 5.7);
-  bake(oldFloor, shell, paint);
-  for (const [x, z] of [
-    [-8.8, 5.7],
-    [8.8, -5.7],
-    [8.8, 5.7],
-  ])
-    contactShadow(oldFloor, 1.3, 1.3, 0.052).position.set(x, 0.052, z);
-
   // The hall's tiles are the floor; this stands in for the old floor slab,
   // which a custom floor-plan image used to hide.
   const floor = new THREE.Object3D();
+  const FLOOR_Y = 0.012;
 
-  const entrance = label(oldFloor, "ENTRANCE", 0, 0.09, 6.5, 2.2, true);
-  entrance.rotation.x = -Math.PI / 2;
+  // Directions start at the pink marker just inside the hall's glass door.
+  const entrance = label(scene, "ENTRANCE", ENTRANCE.x - 0.75, FLOOR_Y + 0.01, ENTRANCE.z, 2.2, true);
+  entrance.rotation.set(-Math.PI / 2, 0, Math.PI / 2);
   const startMarker = new THREE.Mesh(
     new THREE.CylinderGeometry(0.18, 0.18, 0.035, 24),
     new THREE.MeshBasicMaterial({ color: 0xdc7298 }),
   );
-  startMarker.position.set(0, 0.1, 6);
-  oldFloor.add(startMarker);
-  const glass = new THREE.MeshStandardMaterial({
-    color: 0xd4e6e0,
-    transparent: true,
-    opacity: 0.22,
-    roughness: 0.05,
-    metalness: 0.1,
-    envMapIntensity: 1.6,
-  });
-  for (const x of [-6.5, -2.5]) {
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(3.5, 2.1, 0.03), glass);
-    panel.position.set(x, 1.1, 0.8);
-    oldFloor.add(panel);
-  }
-  const roomLabel = label(oldFloor, "STORAGE / 01", -4.4, 0.08, -5.8, 3.2);
-  roomLabel.rotation.x = -Math.PI / 2;
-  const labLabel = label(oldFloor, "WORKSPACE / 02", 4.7, 0.08, 5.6, 3.5);
-  labLabel.rotation.x = -Math.PI / 2;
+  startMarker.position.set(ENTRANCE.x, 0.03, ENTRANCE.z);
+  scene.add(startMarker);
 
   const targets: THREE.Object3D[] = [];
   const boxTargets: THREE.Object3D[] = [];
@@ -414,46 +355,36 @@ export function createOffice(
   const boxOutlines = new Map<string, THREE.LineSegments>();
   const rings = new Map<string, THREE.Mesh>();
   const groups = new Map<string, THREE.Group>();
-  const POST = "#46544d", BEAM = "#56665d", FOOT = "#2f3833", DECK = "#e4cfac";
+  // Tables are the 5190 workbench; shelves are its pine shelving units.
+  const kitMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0.05 });
+  const PINE = "#d6a56b", PINE_BACK = "#bf9058";
   for (const shelf of shelves) {
-    // Racks and tables belong to the old room (see SHOW_OLD_FLOOR).
-    if (!SHOW_OLD_FLOOR) continue;
     const group = new THREE.Group();
     group.position.set(shelf.x, 0, shelf.z);
     group.rotation.y = THREE.MathUtils.degToRad(shelf.rotation);
     scene.add(group);
     groups.set(shelf.id, group);
     if (shelf.kind === "table") {
-      const legs: THREE.BufferGeometry[] = [];
-      for (const x of [-1.1, 1.1]) {
-        for (const z of [-0.5, 0.5]) {
-          legs.push(slab(0.06, 0.96, 0.06, POST, x, 0.48, z));
-          legs.push(slab(0.1, 0.015, 0.1, FOOT, x, 0.0075, z));
-        }
-        legs.push(slab(0.04, 0.04, 1.0, BEAM, x, 0.18, 0));
-      }
-      legs.push(slab(2.2, 0.06, 0.03, BEAM, 0, 0.935, -0.5), slab(2.2, 0.06, 0.03, BEAM, 0, 0.935, 0.5));
-      bake(group, [
-        surfaced(part(new RoundedBoxGeometry(2.6, 0.07, 1.3, 2, 0.025), DECK, 0, 1.0, 0), false),
-        ...legs.map((g) => surfaced(g, true)),
-      ], rack);
-      contactShadow(group, 3.1, 1.8);
+      const bench = new THREE.Mesh(kitGeometry("bench").clone(), kitMat);
+      bench.castShadow = bench.receiveShadow = true;
+      group.add(bench);
+      contactShadow(group, 2.6, 1.5, FLOOR_Y);
       const ring = new THREE.Mesh(
-        new THREE.BoxGeometry(2.9, 0.035, 1.6),
+        new THREE.BoxGeometry(2.4, 0.035, 1.4),
         new THREE.MeshBasicMaterial({
           color: 0x9db7a4,
           transparent: true,
           opacity: 0.2,
         }),
       );
-      ring.position.y = 0.09;
+      ring.position.y = 0.02;
       group.add(ring);
       rings.set(shelf.id, ring);
       const hit = new THREE.Mesh(
-        new THREE.BoxGeometry(2.8, 1.2, 1.5),
+        new THREE.BoxGeometry(2.2, 1.0, 1.2),
         new THREE.MeshBasicMaterial({ visible: false }),
       );
-      hit.position.y = 0.6;
+      hit.position.y = 0.5;
       hit.userData.shelfId = shelf.id;
       group.add(hit);
       targets.push(hit);
@@ -464,69 +395,46 @@ export function createOffice(
       shelfLevels(shelf.levels, boxes.length),
       occupiedLevels(boxes),
     );
-    const top = 0.26 + levels * 0.78;
-    // Boltless steel racking: posts, foot plates, beams and side bracing in one
-    // mesh; plywood decks in another.
-    const frame: THREE.BufferGeometry[] = [];
-    const decks: THREE.BufferGeometry[] = [];
-    for (const x of [-1.28, 1.28]) {
-      for (const z of [-0.48, 0.48]) {
-        frame.push(slab(0.07, top + 0.1, 0.07, POST, x, top / 2, z));
-        frame.push(slab(0.13, 0.015, 0.13, FOOT, x, 0.0075, z));
-      }
-      // Zig-zag side bracing between the two posts of each end frame.
-      const span = 0.96;
-      for (let level = 0; level < levels; level++) {
-        const y0 = 0.25 + level * 0.78, y1 = y0 + 0.78;
-        const rise = y1 - y0 - 0.12;
-        const len = Math.hypot(rise, span - 0.1);
-        const lean = Math.atan2(span - 0.1, rise) * (level % 2 ? 1 : -1);
-        frame.push(
-          part(new THREE.BoxGeometry(0.025, len, 0.02), BEAM, x, (y0 + y1) / 2, 0, lean),
-        );
-      }
-    }
-    for (let level = 0; level <= levels; level++) {
-      const y = 0.25 + level * 0.78;
-      for (const z of [-0.5, 0.5])
-        frame.push(slab(2.5, 0.07, 0.035, BEAM, 0, y - 0.035, z));
-      for (const x of [-1.28, 1.28])
-        frame.push(slab(0.04, 0.05, 0.96, BEAM, x, y - 0.03, 0));
-      decks.push(slab(2.5, 0.03, 0.97, DECK, 0, y + 0.025, 0));
-    }
-    bake(group, [...frame.map((g) => surfaced(g, true)), ...decks.map((g) => surfaced(g, false))], rack);
-    contactShadow(group, 3.3, 1.7);
+    const top = SHELF.base + levels * SHELF.pitch + 0.05;
+    // A pine shelving unit like the stockroom's: posts, boards and a back panel.
+    const unit: THREE.BufferGeometry[] = [];
+    const px = SHELF.w / 2 - 0.025, pz = SHELF.d / 2 - 0.025;
+    for (const x of [-px, px])
+      for (const z of [-pz, pz]) unit.push(slab(0.05, top, 0.05, PINE, x, top / 2, z));
+    for (let level = 0; level <= levels; level++)
+      unit.push(slab(SHELF.w - 0.04, 0.03, SHELF.d, PINE, 0, SHELF.base + level * SHELF.pitch, 0));
+    unit.push(slab(SHELF.w, top, 0.015, PINE_BACK, 0, top / 2, -SHELF.d / 2 + 0.01));
+    bake(group, unit.map((g) => surfaced(g, false)), rack);
+    contactShadow(group, SHELF.w + 0.6, SHELF.d + 0.7, FLOOR_Y);
     const quantity = shelf.items.reduce((n, item) => n + item.quantity, 0);
     boxes.forEach((storage) => {
       const level = Math.floor(storage.slot / 4),
         col = storage.slot % 4;
-      const x = -0.94 + col * 0.62,
-        y = 0.54 + level * 0.78;
       const packageGroup = new THREE.Group();
-      packageGroup.position.set(x, y, 0);
+      packageGroup.position.set(SHELF.colX(col), SHELF.boxY(level), 0);
       group.add(packageGroup);
       packages.set(storage.id, packageGroup);
       const full = storage.items.some((item) => item.quantity > 0);
       // Kraft for boxes holding stock, a paler bleached board for empty ones.
       const tint = full ? "#c9a476" : "#ddd5c6";
+      const { boxW: w, boxH: h, boxD: d } = SHELF;
       const packageMesh = bake(
         packageGroup,
         [
-          part(new RoundedBoxGeometry(0.48, 0.48, 0.7, 2, 0.018), tint, 0, 0, 0),
-          slab(0.075, 0.008, 0.705, "#b08b5c", 0, 0.241, 0),
-          slab(0.075, 0.16, 0.008, "#b08b5c", 0, 0.165, 0.351),
-          slab(0.075, 0.16, 0.008, "#b08b5c", 0, 0.165, -0.351),
+          part(new RoundedBoxGeometry(w, h, d, 2, 0.014), tint, 0, 0, 0),
+          slab(0.065, 0.006, d + 0.004, "#b08b5c", 0, h / 2 + 0.001, 0),
+          slab(0.065, 0.12, 0.006, "#b08b5c", 0, h / 2 - 0.06, d / 2 + 0.001),
         ],
         kraft,
         false,
       );
       packageMesh.userData = { shelfId: shelf.id, boxId: storage.id };
       boxTargets.push(packageMesh);
-      const sticker = label(packageGroup, storage.name, 0, -0.03, 0.357, 0.43, false, true);
+      const sticker = label(packageGroup, storage.name, 0, -0.04, d / 2 + 0.006, w * 0.86, false, true);
       sticker.userData = { shelfId: shelf.id, boxId: storage.id };
       boxTargets.push(sticker);
       const outline = new THREE.LineSegments(
-        new THREE.EdgesGeometry(new THREE.BoxGeometry(0.5, 0.5, 0.72)),
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(SHELF.boxW + 0.02, SHELF.boxH + 0.02, SHELF.boxD + 0.02)),
         new THREE.LineBasicMaterial({ color: 0xef83ad }),
       );
       outline.userData.boxId = storage.id;
@@ -534,21 +442,21 @@ export function createOffice(
       packageGroup.add(outline);
       boxOutlines.set(storage.id, outline);
     });
-    label(group, shelf.name, 0, top + 0.29, 0.05, 2.7, true);
+    label(group, shelf.name, 0, top + 0.2, 0, SHELF.w - 0.1, true);
     const ring = new THREE.Mesh(
-      new THREE.BoxGeometry(3.05, 0.035, 1.5),
+      new THREE.BoxGeometry(SHELF.w + 0.5, 0.035, SHELF.d + 0.9),
       new THREE.MeshBasicMaterial({
         color: quantity ? 0x9db7a4 : 0xe9bc79,
         transparent: true,
         opacity: 0.3,
       }),
     );
-    ring.position.y = 0.09;
+    ring.position.y = 0.02;
     group.add(ring);
     rings.set(shelf.id, ring);
     // A transparent hit volume keeps small struts and empty shelves easy to select.
     const hit = new THREE.Mesh(
-      new THREE.BoxGeometry(2.9, top + 0.45, 1.3),
+      new THREE.BoxGeometry(SHELF.w + 0.2, top + 0.35, SHELF.d + 0.5),
       new THREE.MeshBasicMaterial({ visible: false }),
     );
     hit.position.y = top / 2;
@@ -900,14 +808,14 @@ export function createOffice(
         );
         const col = Math.max(
             0,
-            Math.min(3, Math.round((point.x + 0.94) / 0.62)),
+            Math.min(3, Math.round((point.x - SHELF.colX(0)) / SHELF.colStep)),
           ),
           level = Math.max(
             0,
-            Math.min(levels - 1, Math.round((point.y - 0.54) / 0.78)),
+            Math.min(levels - 1, Math.round((point.y - SHELF.boxY(0)) / SHELF.pitch)),
           );
         boxDrag.slot = level * 4 + col;
-        boxDrag.group.position.set(-0.94 + col * 0.62, 0.54 + level * 0.78, 0);
+        boxDrag.group.position.set(SHELF.colX(col), SHELF.boxY(level), 0);
       }
       return;
     }
@@ -1025,6 +933,8 @@ export function createOffice(
       if (t === 1) flight = null;
     }
     controls.update();
+    // Close up on a shelf or box, see through any hall furniture in the way.
+    verlet.cutaway(detail ? camera.position : null, controls.target);
     renderer.render(scene, camera);
   });
   return {

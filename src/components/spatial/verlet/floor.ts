@@ -13,9 +13,17 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import * as T from "./textures.js";
 import { kitGeometry } from "./kit.js";
+import {
+  AREA,
+  CEILING,
+  COLUMNS,
+  PIECES,
+  REPLACED,
+  SHELVING,
+} from "@/lib/spatial/verlet-site";
 
-/** World = hall + HALL_OFFSET (the office map's camera and routes use world space). */
-export const HALL_OFFSET = new THREE.Vector3(8, 0, 5);
+/** The hall's centre is the world origin; shelves, routes and Edit plan share it. */
+export const HALL_OFFSET = new THREE.Vector3(0, 0, 0);
 /** The hall's centre in world space, for framing and the sun. */
 export const HALL_CENTER = HALL_OFFSET.clone();
 export const HALL_HALF_WIDTH = 19.5;
@@ -34,102 +42,48 @@ export const SKY = { top: "#4a6687", horizon: "#d9c8b4", ground: "#a99a8c" };
 const FH = 3.8;
 const BELOW = 4;
 const GROUND_Y = -BELOW * FH;
-const CEILING = 3.2;
 const PL = { x0: -18.5, x1: 42.5, z0: -12.5, z1: 12.5 };
 const PW = PL.x1 - PL.x0,
   PD = PL.z1 - PL.z0,
   PCX = (PL.x0 + PL.x1) / 2,
   PCZ = (PL.z0 + PL.z1) / 2;
-const AREA = { x0: -18, x1: 18, z0: -12, z1: 12 };
-const GRID = 6;
 const DOOR = { z: -1.5, w: 2.0 };
 const LIFTS = { x: 31, z: -1.5 };
 const STREET = { z: 24, width: 10 };
-const ZONES: Record<string, [number, number]> = {
-  stock: [-11, -8],
-  robo: [2, -8],
-  hard: [13, -7],
-  soft: [-5, 6],
-  field: [13, 7],
-};
-const SHELVING = {
-  bayW: 1.05,
-  depth: 0.45,
-  height: 2.4,
-  levels: [0.12, 0.7, 1.28, 1.86],
-  bays: 3,
-  racks: [
-    { name: "A", x: -17.5, z: -11.55, dir: "east" },
-    { name: "B", x: -14.25, z: -11.55, dir: "east" },
-    { name: "C", x: -17.55, z: -10.6, dir: "south" },
-  ],
-};
 const TREES = [
   [-26, 20], [-12, 20.5], [2, 20], [18, 20.5], [32, 20],
   [48, 20.5], [-28, 4], [52, 2], [-28, -14], [52, -14],
 ];
-
-/** The default floor plan from mockup/src/data.js, in zone-local metres. */
-function furniture() {
-  const P: [string, string, number, number, number][] = [];
-  const add = (zone: string, kind: string, x: number, z: number, rot = 0) =>
-    P.push([zone, kind, x, z, rot]);
-  const R = Math.PI;
-  const xs = [-11.2, -9.5, -5.2, -3.5, 1.0, 2.7, 7.0, 8.7];
-  xs.forEach((x) => add("soft", "workstation", x, -3.4, R));
-  xs.forEach((x) => add("soft", "workstation", x, 3.2, R));
-  add("soft", "frontDesk", 11.2, -3.8, R);
-  add("soft", "meeting", 11.4, 3.7);
-  add("soft", "tv", -12.2, 0.2, Math.PI / 2);
-  add("soft", "bin", -0.4, 0.9);
-  add("soft", "fan", 4.0, 0.8);
-  add("soft", "plant", 12.4, -0.6);
-  [-0.8, 2.4, 4.9].forEach((x) => add("robo", "robotCell", x, -2.8));
-  add("robo", "shelf", -5.0, -3.45, 0);
-  add("robo", "shelf", -3.6, -3.45, 0);
-  add("robo", "amr", 0.5, 1.2, 0.5);
-  add("robo", "amr", 2.6, 3.0, -0.4);
-  add("robo", "workstation", -4.6, 1.8, 0);
-  add("robo", "workstation", 0.8, 2.6, 0);
-  add("robo", "server", 5.2, 3.0, -Math.PI / 2);
-  add("robo", "board", -5.6, -0.5, Math.PI / 2);
-  [-4.2, -3.35, -2.5, -1.65].forEach((x) => add("hard", "printer", x, -4.4));
-  add("hard", "bench", 1.4, -4.3);
-  add("hard", "bench", 3.6, -4.3);
-  add("hard", "shelf", 4.3, -1.6, -Math.PI / 2);
-  add("hard", "bench", -2.6, 2.8);
-  add("hard", "bench", -0.4, 2.8, R);
-  add("hard", "workstation", 3.2, 2.4, 0);
-  add("hard", "fan", -4.4, 0.2);
-  add("hard", "plant", 4.4, 4.4);
-  add("field", "cases", -3.2, -3.5, 0);
-  add("field", "pallet", -0.8, -3.6);
-  add("field", "shelf", 3.6, -4.1);
-  add("field", "bench", 2.4, 1.8);
-  add("field", "plywood", -3.4, 4.1, R);
-  add("field", "ladder", 4.0, 3.6);
-  add("stock", "heavyRack", 3.6, -3.35, 0);
-  add("stock", "bench", 0.4, -0.6);
-  add("stock", "bench", 2.7, -0.6);
-  add("stock", "workstation", 3.2, 2.6, R);
-  add("stock", "pallet", -4.4, 2.6);
-  add("stock", "bin", 6.3, 3.4);
-  return P;
-}
 
 function hash(i: number) {
   const x = Math.sin(i * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
 }
 
+/** Uniforms for the see-through cut: anything within uCutR of the line from
+ *  the camera (A) to what it is looking at (B) is not drawn. */
+type Cut = Record<"uCutOn" | "uCutA" | "uCutB" | "uCutR", THREE.IUniform>;
 /** Per-vertex metalness/roughness, so one material serves wood, paint and aluminium. */
-function surfaceShader(material: THREE.MeshStandardMaterial, key: string) {
+function surfaceShader(material: THREE.MeshStandardMaterial, key: string, cut: Cut) {
   material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, cut);
     shader.vertexShader = shader.vertexShader
-      .replace("#include <common>", "#include <common>\nattribute vec2 surface;\nvarying vec2 vSurface;")
-      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvSurface = surface;");
+      .replace("#include <common>", "#include <common>\nattribute vec2 surface;\nvarying vec2 vSurface;\nvarying vec3 vCutPos;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvSurface = surface;\nvCutPos = (modelMatrix * vec4(transformed, 1.0)).xyz;");
     shader.fragmentShader = shader.fragmentShader
-      .replace("#include <common>", "#include <common>\nvarying vec2 vSurface;")
+      .replace(
+        "#include <common>",
+        "#include <common>\nvarying vec2 vSurface;\nvarying vec3 vCutPos;\nuniform float uCutOn;\nuniform vec3 uCutA;\nuniform vec3 uCutB;\nuniform float uCutR;",
+      )
+      .replace(
+        "#include <clipping_planes_fragment>",
+        `#include <clipping_planes_fragment>
+        if (uCutOn > 0.5) {
+          vec3 ab = uCutB - uCutA;
+          float t = clamp(dot(vCutPos - uCutA, ab) / max(dot(ab, ab), 1e-4), 0.0, 1.0);
+          if (t < 0.85 && distance(vCutPos, uCutA + ab * t) < uCutR) discard;
+        }`,
+      )
       .replace("#include <metalnessmap_fragment>", "#include <metalnessmap_fragment>\nmetalnessFactor *= vSurface.x;")
       .replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\nroughnessFactor *= vSurface.y;");
   };
@@ -265,7 +219,13 @@ export function createVerletFloor() {
   const greyMat = worldUV(new THREE.MeshStandardMaterial({ map: tile.map, roughness: 0.5, color: "#9d9a95" }), "floor", 1 / 0.6);
   const grassMat = worldUV(new THREE.MeshStandardMaterial({ map: T.grass(), roughness: 0.95 }), "floor", 0.09);
   const curtainMat = worldUV(new THREE.MeshStandardMaterial({ map: T.curtainWall(), metalness: 0.55, roughness: 0.12, envMapIntensity: 1.6 }), "wall", 1 / 1.5);
-  const paintMat = surfaceShader(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 1 }), "verlet-paint");
+  const cut: Cut = {
+    uCutOn: { value: 0 },
+    uCutA: { value: new THREE.Vector3() },
+    uCutB: { value: new THREE.Vector3() },
+    uCutR: { value: 1.1 },
+  };
+  const paintMat = surfaceShader(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 1 }), "verlet-paint", cut);
   const clearGlass = new THREE.MeshStandardMaterial({ color: "#a9c4d4", transparent: true, opacity: 0.28, metalness: 0.2, roughness: 0.05, envMapIntensity: 1.6, depthWrite: false });
   const frostMat = new THREE.MeshStandardMaterial({ map: T.frosted(), transparent: true, roughness: 0.5, depthWrite: false });
   const cardMat = new THREE.MeshStandardMaterial({ map: T.cardboard(), roughness: 0.92 });
@@ -357,9 +317,7 @@ export function createVerletFloor() {
   // a dark cap on the cut walls, like an architectural section
   P(box(AREA.x1 - AREA.x0, 0.03, WT + 0.01, 0, CEILING + 0.015, AREA.z0 + WT / 2), "#3c4641");
   P(box(WT + 0.01, 0.03, AREA.z1 - AREA.z0, AREA.x0 + WT / 2, CEILING + 0.015, 0), "#3c4641");
-  for (let x = AREA.x0 + GRID; x < AREA.x1 - 0.1; x += GRID)
-    for (let z = AREA.z0 + GRID; z < AREA.z1 - 0.1; z += GRID)
-      P(box(0.5, CEILING, 0.5, x, CEILING / 2, z), "#8fb0bd");
+  for (const [x, z] of COLUMNS) P(box(0.5, CEILING, 0.5, x, CEILING / 2, z), "#8fb0bd");
   for (let x = AREA.x0 + 0.75; x < AREA.x1; x += 1.5)
     for (let k = 0; k < 6; k++)
       P(box(1.42, 0.03, 0.06, x, CEILING - 0.08 - k * 0.07, AREA.z1 - 0.12), "#e9ebec", 0, 0.6);
@@ -385,7 +343,8 @@ export function createVerletFloor() {
   const SH = SHELVING;
   const cards: THREE.BufferGeometry[] = [], trays: THREE.BufferGeometry[] = [], tags: THREE.BufferGeometry[] = [];
   const bins: { code: string; x: number; y: number; z: number; h: number; d: number; rot: number; front: [number, number]; tray: boolean }[] = [];
-  for (const r of SH.racks) {
+  // Racks that an inventory location stands on are drawn by the office map.
+  for (const r of SH.racks.filter((rack) => !REPLACED.has(rack.id))) {
     const along: [number, number] = r.dir === "east" ? [1, 0] : [0, 1];
     const front: [number, number] = r.dir === "east" ? [0, 1] : [1, 0];
     const at = (u: number, v: number) => [r.x + along[0] * u + front[0] * v, r.z + along[1] * u + front[1] * v];
@@ -438,15 +397,23 @@ export function createVerletFloor() {
   bake(tags, new THREE.MeshStandardMaterial({ map: atlas.texture, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -1 }), false);
 
   // ---- furniture: the 5190 floor plan ---------------------------------------------
-  for (const [zone, kind, lx, lz, rot] of furniture()) {
-    const [zx, zz] = ZONES[zone];
-    P(placed(kitGeometry(kind).clone(), zx + lx, 0, zz + lz, rot), "#ffffff", 0.05, 0.62);
-  }
+  // Pieces that stand for an inventory location are drawn by the office map.
+  for (const p of PIECES)
+    if (!REPLACED.has(p.id))
+      P(placed(kitGeometry(p.kind).clone(), p.x, 0, p.z, p.rot), "#ffffff", 0.05, 0.62);
 
   bake(painted, paintMat, true);
 
   return {
     group,
+    /** Cut away the hall's furniture between `from` and `to`; null turns it off. */
+    cutaway(from: THREE.Vector3 | null, to?: THREE.Vector3) {
+      cut.uCutOn.value = from && to ? 1 : 0;
+      if (from && to) {
+        (cut.uCutA.value as THREE.Vector3).copy(from);
+        (cut.uCutB.value as THREE.Vector3).copy(to);
+      }
+    },
     dispose() {
       const textures = new Set<THREE.Texture>();
       const materials = new Set<THREE.Material>();

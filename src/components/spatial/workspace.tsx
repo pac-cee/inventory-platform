@@ -254,7 +254,8 @@ export function SpatialWorkspace({
           : [];
     },
   );
-  const storageKey = `verlet-spatial-v1:${userId}`;
+  // v2: positions are on Verlet's floor (v1 layouts used the old room's grid).
+  const storageKey = `verlet-spatial-v2:${userId}`;
 
   useEffect(() => {
     // Browser-only persistence is synchronized after hydration.

@@ -11,10 +11,10 @@ describe("spatial inventory", () => {
     expect(shelfFill(1, 100)).toBe(1);
     expect(shelfFill(8, 8)).toBe(8);
   });
-  it("keeps a shelf within the office floor", () => {
+  it("keeps a shelf within Verlet's floor", () => {
     expect(clampPlacement({ x: 500, z: -500, rotation: 91 })).toEqual({
-      x: 8,
-      z: -5,
+      x: 17.5,
+      z: -11.5,
       rotation: 90,
     });
   });

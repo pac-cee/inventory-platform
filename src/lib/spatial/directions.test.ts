@@ -1,33 +1,52 @@
 import { expect, it } from "vitest";
-import { findFloorRoute, officeObstacles, shelfApproach } from "./directions";
-it("routes from the entrance to each sample shelf without crossing obstacles", () => {
-  const shelves = [
-    { id: "a", name: "A", x: -6, z: -3, rotation: 0, items: [] },
-    { id: "b", name: "B", x: -2, z: -3, rotation: 0, items: [] },
-    { id: "c", name: "C", x: 2, z: -3, rotation: 0, items: [] },
-  ];
+import {
+  OFFICE_ENTRANCE,
+  findFloorRoute,
+  officeObstacles,
+  shelfApproach,
+} from "./directions";
+import { isKnownLocation, locationHome } from "./verlet-site";
+
+const LOCATIONS = [
+  "Cables box", "Camera box", "Field Kit", "Front desk", "Lab A", "Main Store",
+  "Main Warehouse", "Office", "Rack 1", "Rack 1 · Level 2", "Robotics Lab",
+  "Shelf A", "Shelf B",
+];
+const inside = (
+  p: { x: number; z: number },
+  obstacles: ReturnType<typeof officeObstacles>,
+) =>
+  obstacles.some(
+    (o) => p.x >= o.minX && p.x <= o.maxX && p.z >= o.minZ && p.z <= o.maxZ,
+  );
+
+it("gives every sample location a home on Verlet's floor", () => {
+  for (const name of LOCATIONS) expect(isKnownLocation(name)).toBe(true);
+});
+it("routes from the door to every location's shelf without crossing anything", () => {
+  const shelves = LOCATIONS.map((name, i) => ({
+    id: String(i),
+    name,
+    ...locationHome(name, 0),
+    items: [],
+  }));
   const obstacles = officeObstacles(shelves);
   for (const shelf of shelves) {
     const route = findFloorRoute(
-      { x: 0, z: 6 },
+      OFFICE_ENTRANCE,
       shelfApproach(shelf),
       obstacles,
     );
-    expect(route).not.toBeNull();
-    for (const p of route!.points)
-      expect(
-        obstacles.some(
-          (o) =>
-            p.x >= o.minX && p.x <= o.maxX && p.z >= o.minZ && p.z <= o.maxZ,
-        ),
-      ).toBe(false);
+    expect(route, shelf.name).not.toBeNull();
+    for (const p of route!.points) expect(inside(p, obstacles)).toBe(false);
     expect(route!.distance).toBeGreaterThan(0);
   }
 });
 it("reports a blocked route rather than drawing through furniture", () => {
   expect(
-    findFloorRoute({ x: 0, z: 6 }, { x: 0, z: -3 }, [
-      { minX: -10, maxX: 10, minZ: 0, maxZ: 1 },
+    findFloorRoute(OFFICE_ENTRANCE, { x: 0, z: -3 }, [
+      { minX: -18, maxX: 18, minZ: -2.2, maxZ: -1.8 },
+      { minX: 15, maxX: 16, minZ: -12, maxZ: 12 },
     ]),
   ).toBeNull();
 });
@@ -39,17 +58,11 @@ it("rejects invalid and out-of-floor endpoints", () => {
   expect(findFloorRoute({ x: 20, z: 6 }, { x: 0, z: 0 }, [])).toBeNull();
 });
 it("uses current table placements and releases space after removal", () => {
-  const blocked = (
-    x: number,
-    z: number,
-    obstacles: ReturnType<typeof officeObstacles>,
-  ) =>
-    obstacles.some(
-      (o) => x >= o.minX && x <= o.maxX && z >= o.minZ && z <= o.maxZ,
-    );
-  expect(blocked(-6, 3.5, officeObstacles([], []))).toBe(false);
+  expect(inside({ x: 3, z: -2 }, officeObstacles([], []))).toBe(false);
   expect(
-    blocked(4, 4, officeObstacles([], [{ x: 4, z: 4, rotation: 0 }])),
+    inside({ x: 3, z: -2 }, officeObstacles([], [{ x: 3, z: -2, rotation: 0 }])),
   ).toBe(true);
-  expect(blocked(4, 4, officeObstacles([], []))).toBe(false);
+});
+it("walks round the floor's columns and furniture", () => {
+  expect(inside({ x: 0, z: 0 }, officeObstacles([], []))).toBe(true);
 });

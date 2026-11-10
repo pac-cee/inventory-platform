@@ -1,3 +1,5 @@
+import { FLOOR_BOUNDS } from "./verlet-site";
+
 export interface Placement {
   x: number;
   z: number;
@@ -37,8 +39,8 @@ export function clampPlacement(p: Placement): Placement {
     ...(Number.isFinite(p.levels)
       ? { levels: Math.max(1, Math.min(6, Math.round(p.levels!))) }
       : {}),
-    x: Math.max(-8, Math.min(8, p.x)),
-    z: Math.max(-5, Math.min(5, p.z)),
+    x: Math.max(FLOOR_BOUNDS.x0, Math.min(FLOOR_BOUNDS.x1, p.x)),
+    z: Math.max(FLOOR_BOUNDS.z0, Math.min(FLOOR_BOUNDS.z1, p.z)),
     rotation: (((Math.round(p.rotation / 90) * 90) % 360) + 360) % 360,
   };
 }

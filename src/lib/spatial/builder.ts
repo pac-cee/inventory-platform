@@ -1,4 +1,5 @@
 import { clampPlacement, type Placement, type SpatialShelf } from "./model";
+import { TABLE_HOMES } from "./verlet-site";
 export function shelfLevels(requested: number | undefined, boxCount: number) {
   return Math.max(
     Math.ceil(boxCount / 4),
@@ -27,32 +28,17 @@ export function emptyShelfCopy(s: SpatialShelf, id: string): SpatialShelf {
   };
 }
 
+/** The office's tables, standing on the 5190 floor's benches. */
 export const OFFICE_TABLES: SpatialShelf[] = [
-  {
-    id: "office-table-1",
-    name: "Desk 1",
-    x: -6,
-    z: 3.5,
-    rotation: 0,
-    kind: "table",
-    items: [],
-  },
-  {
-    id: "office-table-2",
-    name: "Desk 2",
-    x: -2.5,
-    z: 3.5,
-    rotation: 0,
-    kind: "table",
-    items: [],
-  },
-  {
-    id: "office-table-3",
-    name: "Work table",
-    x: 5,
-    z: 2.7,
-    rotation: 0,
-    kind: "table",
-    items: [],
-  },
-];
+  ["office-table-1", "Desk 1"],
+  ["office-table-2", "Desk 2"],
+  ["office-table-3", "Work table"],
+].map(([id, name]) => ({
+  id,
+  name,
+  x: TABLE_HOMES[id].x,
+  z: TABLE_HOMES[id].z,
+  rotation: TABLE_HOMES[id].rotation,
+  kind: "table" as const,
+  items: [],
+}));

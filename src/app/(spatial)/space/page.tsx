@@ -11,6 +11,7 @@ import type {
 } from "@/lib/api/types";
 import type { SpatialShelf } from "@/lib/spatial/model";
 import { SpatialWorkspace } from "@/components/spatial/workspace";
+import { isKnownLocation, locationHome } from "@/lib/spatial/verlet-site";
 
 export default async function SpacePage() {
   const api = serverApi();
@@ -53,12 +54,16 @@ export default async function SpacePage() {
     );
   const [locations, items, stock] = data;
   const byId = new Map(items.map((item) => [item.id, item]));
-  const shelves: SpatialShelf[] = locations.map((location, index) => ({
+  // Each location stands where its furniture is on Verlet's floor; locations
+  // the floor plan doesn't know take the next spare spot.
+  let spare = 0;
+  const shelves: SpatialShelf[] = locations.map((location) => ({
     id: location.id,
     name: location.name,
-    x: -6 + (index % 4) * 4,
-    z: -3 + Math.floor(index / 4) * 3,
-    rotation: 0,
+    ...locationHome(
+      location.name,
+      isKnownLocation(location.name) ? 0 : spare++,
+    ),
     items: stock
       .filter((row) => row.location_id === location.id)
       .map((row) => ({
