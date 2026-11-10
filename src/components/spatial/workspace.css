@@ -1705,3 +1705,8 @@
     opacity: 1;
   }
 }
+/* Map controls stay above the shelf tags. */
+.spatial-view-controls,
+.spatial-camera-controls {
+  z-index: 3;
+}

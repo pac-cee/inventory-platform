@@ -57,9 +57,10 @@ it("rejects invalid and out-of-floor endpoints", () => {
   expect(findFloorRoute({ x: 20, z: 6 }, { x: 0, z: 0 }, [])).toBeNull();
 });
 it("uses current table placements and releases space after removal", () => {
-  expect(inside({ x: 3, z: -2 }, officeObstacles([], []))).toBe(false);
+  // just inside the door, which the layout keeps clear
+  expect(inside({ x: -5.5, z: -10.5 }, officeObstacles([], []))).toBe(false);
   expect(
-    inside({ x: 3, z: -2 }, officeObstacles([], [{ x: 3, z: -2, rotation: 0 }])),
+    inside({ x: -5.5, z: -10.5 }, officeObstacles([], [{ x: -5.5, z: -10.5, rotation: 0 }])),
   ).toBe(true);
 });
 it("walks round the floor's columns and furniture", () => {

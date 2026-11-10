@@ -3,10 +3,12 @@
 // map's 3D scene and its route finder. Metres; x runs east, z runs south,
 // y is up; the hall's centre is the origin.
 //
-// Layout (2026-11-10, from the user): everything in the hall is turned 90°
-// in place; the door is in the north yellow wall where Rack 1 and Shelf A
-// stood; through it a corridor and four small offices, and beyond them the
-// building's street face on KN 5 Rd.
+// Layout (2026-11-10, from the user): the hall's whole layout is turned 180°
+// about the hall's centre (every object and material moves and turns; walls,
+// columns and the building do not), so the shelves that lined the north wall
+// now line the south (window) wall. The door is in the north yellow wall
+// where Rack 1 and Shelf A stood; through it a corridor and four small
+// offices, and beyond them the building's street face on KN 5 Rd.
 //
 // Inventory locations get a home on this floor: the piece of 5190 furniture
 // that stands for that location (Shelf A on the robotics shelf unit, Rack 1
@@ -39,8 +41,10 @@ export const DOOR = { x: -5.5, w: 2.0 };
 export const ENTRANCE = { x: -5.5, z: -11 };
 export const CEILING = 3.2;
 export const GRID = 6;
-/** Every object in the hall is turned this much in place (walls are not). */
-export const TURN = Math.PI / 2;
+/** The hall's layout is turned this much about the hall's centre (walls are not). */
+export const TURN = Math.PI;
+/** Turn a point of the 5190 floor plan into this layout. */
+const turnPoint = (x: number, z: number): [number, number] => [-x, -z];
 
 /** Column centres on the 6 m grid. */
 export const COLUMNS: [number, number][] = [];
@@ -92,22 +96,21 @@ function inside(p: Piece): Piece {
   };
 }
 
-/** Pieces moved after the turn so nothing overlaps and the door stays clear. */
+/** Pieces moved after the turn: the front desk stands just inside the door. */
 const MOVED: Record<string, Partial<Piece>> = {
   reception: { x: -5.5, z: -7.6, rot: Math.PI },
-  "robo-board": { x: 3.4, z: -9.0 },
-  "stock-pallet": { x: -13.2, z: -4.6 },
-  "stock-bin": { x: -11.6, z: -4.4 },
-  "stock-desk": { x: -13.4, z: -6.6 },
+  // the meeting table would block the doorway; it takes the front desk's old spot
+  "soft-meeting": { x: -7.2, z: -2.6, rot: 0 },
 };
 
-/** The default floor plan from mockup/src/data.js, turned 90° in the hall,
+/** The default floor plan from mockup/src/data.js, turned 180° in the hall,
  *  plus the small offices behind the north wall. */
 export const PIECES: Piece[] = (() => {
   const out: Piece[] = [];
   const add = (zone: string, kind: string, x: number, z: number, rot = 0, id?: string) => {
     const [zx, zz] = ZONES[zone];
-    const piece = inside({ id: id ?? `${zone}-${kind}-${out.length}`, kind, x: zx + x, z: zz + z, rot: rot + TURN });
+    const [tx, tz] = turnPoint(zx + x, zz + z);
+    const piece = inside({ id: id ?? `${zone}-${kind}-${out.length}`, kind, x: tx, z: tz, rot: rot + TURN });
     out.push(inside({ ...piece, ...MOVED[piece.id] }));
   };
   const R = Math.PI;
@@ -115,7 +118,7 @@ export const PIECES: Piece[] = (() => {
   xs.forEach((x) => add("soft", "workstation", x, -3.4, R));
   xs.forEach((x) => add("soft", "workstation", x, 3.2, R));
   add("soft", "frontDesk", 11.2, -3.8, R, "reception");
-  add("soft", "meeting", 11.4, 3.7);
+  add("soft", "meeting", 11.4, 3.7, 0, "soft-meeting");
   add("soft", "tv", -12.2, 0.2, Math.PI / 2);
   add("soft", "bin", -0.4, 0.9);
   add("soft", "fan", 4.0, 0.8);
@@ -168,8 +171,8 @@ export const PIECES: Piece[] = (() => {
   return out;
 })();
 
-/** Pine shelving (the stockroom's wall units); turned with the rest, so the
- *  one left as scenery now runs out from the north wall as a row. */
+/** Pine shelving (the stockroom's wall units), turned with the rest: the L
+ *  that lined the north and west walls now lines the south and east ones. */
 export const SHELVING = {
   bayW: 1.05,
   depth: 0.45,
@@ -177,41 +180,58 @@ export const SHELVING = {
   levels: [0.12, 0.7, 1.28, 1.86],
   bays: 3,
   racks: [
-    { id: "rack-a", name: "A", x: -17.5, z: -11.55, dir: "east" as "east" | "south" },
-    { id: "rack-b", name: "B", x: -12.9, z: -11.55, dir: "south" as "east" | "south" },
-    { id: "rack-c", name: "C", x: -17.55, z: -10.6, dir: "south" as "east" | "south" },
+    { id: "rack-a", name: "A", x: 17.5, z: 11.55, dir: "west" as RackDir },
+    { id: "rack-b", name: "B", x: 14.25, z: 11.55, dir: "west" as RackDir },
+    { id: "rack-c", name: "C", x: 17.55, z: 10.6, dir: "north" as RackDir },
   ],
 };
+type RackDir = "east" | "west" | "south" | "north";
+/** Which way a wall rack runs (along), which way its shelves face (front), and its turn. */
+export const RACK_DIRS: Record<RackDir, { along: [number, number]; front: [number, number]; rot: number }> = {
+  east: { along: [1, 0], front: [0, 1], rot: 0 },
+  south: { along: [0, 1], front: [1, 0], rot: Math.PI / 2 },
+  west: { along: [-1, 0], front: [0, -1], rot: Math.PI },
+  north: { along: [0, -1], front: [-1, 0], rot: -Math.PI / 2 },
+};
 
-/** Inventory locations (by name) and the 5190 furniture they take the place of.
- *  Shelves that stood along a wall now stand out from it, turned 90°. */
-const HOMES: Record<string, Home & { replaces?: string }> = {
-  "Main Warehouse": { x: -15.9, z: -10.75, rotation: 90, replaces: "rack-a" },
-  "Rack 1 · Level 2": { x: -9.9, z: -10.75, rotation: 90 },
-  "Rack 1": { x: -7.4, z: -10.75, rotation: 90, replaces: "stock-heavy-rack" },
-  "Shelf A": { x: -3.2, z: -10.75, rotation: 90, replaces: "robo-shelf-a" },
-  "Shelf B": { x: -0.2, z: -10.75, rotation: 270, replaces: "robo-shelf-b" },
-  "Main Store": { x: -16.75, z: -9, rotation: 0, replaces: "rack-c" },
-  "Cables box": { x: -16.75, z: -6.6, rotation: 0 },
-  "Camera box": { x: -16.75, z: -3.6, rotation: 0 },
-  "Front desk": { x: -2.6, z: -8.4, rotation: 90 },
-  "Robotics Lab": { x: 5, z: -6.9, rotation: 90 },
-  "Lab A": { x: 16.6, z: -8.6, rotation: 0, replaces: "hard-shelf" },
-  "Field Kit": { x: 9.8, z: 3.8, rotation: 270, replaces: "field-cases" },
-  Office: { x: -6.2, z: 10.75, rotation: 270 },
+/** Inventory locations (by name) on the 5190 floor plan, before the turn,
+ *  and the 5190 furniture they take the place of. */
+const PLAN_HOMES: Record<string, Home & { replaces?: string }> = {
+  "Main Warehouse": { x: -15.9, z: -11.45, rotation: 0, replaces: "rack-a" },
+  "Main Store": { x: -17.45, z: -9, rotation: 90, replaces: "rack-c" },
+  "Rack 1 · Level 2": { x: -9.9, z: -11.45, rotation: 0 },
+  "Rack 1": { x: -7.4, z: -11.45, rotation: 0, replaces: "stock-heavy-rack" },
+  "Cables box": { x: -17.45, z: -6.6, rotation: 90 },
+  "Camera box": { x: -17.45, z: -3.6, rotation: 90 },
+  "Shelf A": { x: -3.2, z: -11.45, rotation: 0, replaces: "robo-shelf-a" },
+  "Shelf B": { x: -1.15, z: -11.45, rotation: 0, replaces: "robo-shelf-b" },
+  "Robotics Lab": { x: 5, z: -7.6, rotation: 0 },
+  "Lab A": { x: 17.3, z: -8.6, rotation: 270, replaces: "hard-shelf" },
+  "Field Kit": { x: 9.8, z: 3.5, rotation: 0, replaces: "field-cases" },
+  "Front desk": { x: 8.4, z: 7.6, rotation: 90 },
+  Office: { x: -6.2, z: 11.5, rotation: 180 },
 };
-/** Open spots for locations the floor plan doesn't know yet. */
-const SPARE: Home[] = [
-  { x: -12.35, z: 10.75, rotation: 270 },
-  { x: -0.15, z: 10.75, rotation: 270 },
-  { x: 14.5, z: 6, rotation: 90 },
+const PLAN_SPARE: Home[] = [
+  { x: -12.35, z: 11.5, rotation: 180 },
+  { x: -0.15, z: 11.5, rotation: 180 },
+  { x: 14.5, z: 6, rotation: 0 },
 ];
-/** The tables the office map always shows, on the 5190 benches. */
-export const TABLE_HOMES: Record<string, Home & { replaces: string }> = {
-  "office-table-1": { x: -11.1, z: -8.6, rotation: 90, replaces: "stock-bench-1" },
-  "office-table-2": { x: -9.4, z: -6.6, rotation: 90, replaces: "stock-bench-2" },
-  "office-table-3": { x: 14.4, z: -10.8, rotation: 90, replaces: "hard-bench-1" },
+const PLAN_TABLES: Record<string, Home & { replaces: string }> = {
+  "office-table-1": { x: -10.6, z: -8.6, rotation: 0, replaces: "stock-bench-1" },
+  "office-table-2": { x: -8.3, z: -8.6, rotation: 0, replaces: "stock-bench-2" },
+  "office-table-3": { x: 14.4, z: -11.3, rotation: 0, replaces: "hard-bench-1" },
 };
+/** A home after the 180° turn: moved across the hall's centre and facing the other way. */
+function turnHome<T extends Home>(h: T): T {
+  const [x, z] = turnPoint(h.x, h.z);
+  return { ...h, x, z, rotation: (h.rotation + 180) % 360 };
+}
+const turnAll = <T extends Home>(r: Record<string, T>) =>
+  Object.fromEntries(Object.entries(r).map(([k, h]) => [k, turnHome(h)])) as Record<string, T>;
+const HOMES = turnAll(PLAN_HOMES);
+const SPARE = PLAN_SPARE.map(turnHome);
+/** The tables the office map always shows, on the 5190 benches. */
+export const TABLE_HOMES = turnAll(PLAN_TABLES);
 
 export const isKnownLocation = (name: string) => name in HOMES;
 
@@ -242,12 +262,16 @@ export function siteObstacles(pad = 0.2): Rect[] {
   for (const [x, z] of COLUMNS) rects.push({ minX: x - c, maxX: x + c, minZ: z - c, maxZ: z + c });
   for (const r of SHELVING.racks) {
     if (REPLACED.has(r.id)) continue;
-    const len = SHELVING.bayW * SHELVING.bays;
-    rects.push(
-      r.dir === "east"
-        ? { minX: r.x - pad, maxX: r.x + len + pad, minZ: r.z - SHELVING.depth / 2 - pad, maxZ: r.z + SHELVING.depth / 2 + pad }
-        : { minX: r.x - SHELVING.depth / 2 - pad, maxX: r.x + SHELVING.depth / 2 + pad, minZ: r.z - pad, maxZ: r.z + len + pad },
-    );
+    const len = SHELVING.bayW * SHELVING.bays, d = SHELVING.depth / 2;
+    const { along } = RACK_DIRS[r.dir];
+    const ex = r.x + along[0] * len, ez = r.z + along[1] * len;
+    const horizontal = along[1] === 0;
+    rects.push({
+      minX: Math.min(r.x, ex) - (horizontal ? 0 : d) - pad,
+      maxX: Math.max(r.x, ex) + (horizontal ? 0 : d) + pad,
+      minZ: Math.min(r.z, ez) - (horizontal ? d : 0) - pad,
+      maxZ: Math.max(r.z, ez) + (horizontal ? d : 0) + pad,
+    });
   }
   return rects;
 }

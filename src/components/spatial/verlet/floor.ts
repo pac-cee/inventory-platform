@@ -20,6 +20,7 @@ import {
   OFFICES,
   COLUMNS,
   PIECES,
+  RACK_DIRS,
   REPLACED,
   SHELVING,
 } from "@/lib/spatial/verlet-site";
@@ -459,10 +460,8 @@ export function createVerletFloor() {
   const bins: { code: string; x: number; y: number; z: number; h: number; d: number; rot: number; front: [number, number]; tray: boolean }[] = [];
   // Racks that an inventory location stands on are drawn by the office map.
   for (const r of SH.racks.filter((rack) => !REPLACED.has(rack.id))) {
-    const along: [number, number] = r.dir === "east" ? [1, 0] : [0, 1];
-    const front: [number, number] = r.dir === "east" ? [0, 1] : [1, 0];
+    const { along, front, rot } = RACK_DIRS[r.dir];
     const at = (u: number, v: number) => [r.x + along[0] * u + front[0] * v, r.z + along[1] * u + front[1] * v];
-    const rot = r.dir === "east" ? 0 : Math.PI / 2;
     for (let k = 0; k <= SH.bays; k++)
       for (const v of [-SH.depth / 2, SH.depth / 2]) {
         const [x, z] = at(k * SH.bayW, v);
