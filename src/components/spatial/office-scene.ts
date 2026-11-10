@@ -711,13 +711,13 @@ export function createOffice(
   function flyTo(
     position: THREE.Vector3,
     target: THREE.Vector3,
-    options: { fov?: number; duration?: number; orbit?: number; done?: () => void } = {},
+    options: { fov?: number; duration?: number; orbit?: number; done?: () => void; intro?: boolean } = {},
   ) {
     controls.enableDamping = false;
     controls.update();
     controls.enableDamping = true;
     const fovTo = options.fov ?? camera.fov;
-    if (!rendered || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if ((!rendered && !options.intro) || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       flight = null;
       camera.position.copy(position);
       controls.target.copy(target);
@@ -744,6 +744,9 @@ export function createOffice(
   }
   /** False until the first frame is drawn: the opening view is placed, not flown. */
   let rendered = false;
+  /** The first load glides in from a wider, turned view; a rebuild that
+   *  restores an earlier camera skips it. */
+  let intro = true;
   function focusObject(id: string, boxId?: string | null) {
     const inspectBox = !!boxId && isolatedId === boxId;
     const object = boxId ? packages.get(boxId) : groups.get(id);
@@ -1102,7 +1105,21 @@ export function createOffice(
   });
   resize.observe(host);
   renderer.setAnimationLoop(() => {
-    if (document.hidden) return;
+    // Nothing to draw until the map knows its size (and the intro needs it).
+    if (document.hidden || viewW <= 1) return;
+    if (intro && !rendered && atOverview) {
+      intro = false;
+      const plan = !controls.enableRotate, fov = overviewFov(plan);
+      const end = overviewPosition(plan, fov);
+      camera.position
+        .copy(end)
+        .sub(HALL_CENTER)
+        .applyAxisAngle(THREE.Object3D.DEFAULT_UP, -0.45)
+        .multiplyScalar(1.3)
+        .add(HALL_CENTER);
+      controls.update();
+      flyTo(end, HALL_CENTER, { fov, duration: 2200, intro: true, done: () => { atOverview = true; } });
+    }
     if (flight) {
       const t = Math.min(1, (performance.now() - flight.start) / flight.duration);
       const e = easeInOut(t);
@@ -1195,6 +1212,7 @@ export function createOffice(
         radius: number;
       } | null;
     }) {
+      intro = false;
       detail = !!state.detail;
       focusAnchor = state.anchor
         ? { id: state.anchor.id, boxId: state.anchor.boxId }

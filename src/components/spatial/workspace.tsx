@@ -58,6 +58,7 @@ import {
 } from "@/lib/spatial/model";
 import { readDraft, type SpatialDraft } from "@/lib/spatial/draft";
 import type { createOffice } from "./office-scene";
+import { FloorSketch } from "./floor-sketch";
 import "./workspace.css";
 
 import { BoxInspector } from "./box-inspector";
@@ -795,9 +796,12 @@ export function SpatialWorkspace({
             )}
             <div ref={host} className="spatial-canvas" />
             {!ready && !error && (
-              <div className="spatial-loading">
-                Building your space
-                <span />
+              <div className="spatial-loading" role="status">
+                <FloorSketch shelves={objects} />
+                <p className="spatial-loading-note">
+                  Building your space
+                  <span />
+                </p>
               </div>
             )}
             {error && (
