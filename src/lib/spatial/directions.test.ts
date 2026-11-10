@@ -45,8 +45,7 @@ it("routes from the door to every location's shelf without crossing anything", (
 it("reports a blocked route rather than drawing through furniture", () => {
   expect(
     findFloorRoute(OFFICE_ENTRANCE, { x: 0, z: -3 }, [
-      { minX: -18, maxX: 18, minZ: -2.2, maxZ: -1.8 },
-      { minX: 15, maxX: 16, minZ: -12, maxZ: 12 },
+      { minX: -18, maxX: 18, minZ: -10.6, maxZ: -10.2 },
     ]),
   ).toBeNull();
 });

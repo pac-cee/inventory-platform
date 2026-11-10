@@ -341,8 +341,8 @@ export function createOffice(
   const FLOOR_Y = 0.012;
 
   // Directions start at the pink marker just inside the hall's glass door.
-  const entrance = label(scene, "ENTRANCE", ENTRANCE.x - 0.75, FLOOR_Y + 0.01, ENTRANCE.z, 2.2, true);
-  entrance.rotation.set(-Math.PI / 2, 0, Math.PI / 2);
+  const entrance = label(scene, "ENTRANCE", ENTRANCE.x, FLOOR_Y + 0.01, ENTRANCE.z + 0.75, 2.2, true);
+  entrance.rotation.set(-Math.PI / 2, 0, 0);
   const startMarker = new THREE.Mesh(
     new THREE.CylinderGeometry(0.18, 0.18, 0.035, 24),
     new THREE.MeshBasicMaterial({ color: 0xdc7298 }),
@@ -503,7 +503,7 @@ export function createOffice(
   const placed: [number, number, number, number][] = [];
   function placeTags() {
     const show = !detail && !inspection;
-    tagLayer.style.display = show ? "" : "none";
+    tagLayer.classList.toggle("is-off", !show);
     if (!show) return;
     // Nearest and selected first; a tag that would overlap one already placed
     // waits until you zoom in, so the view never turns into a pile of labels.
@@ -687,35 +687,63 @@ export function createOffice(
     isolatedId = id;
     controls.maxPolarAngle = Math.PI - 0.01;
   }
+  /** A camera move: eased, timed by distance, with the lens blended and a
+   *  gentle lift on long moves so the room stays in view on the way. */
   let flight: {
     start: number;
+    duration: number;
     from: THREE.Vector3;
     to: THREE.Vector3;
     targetFrom: THREE.Vector3;
     targetTo: THREE.Vector3;
+    fovFrom: number;
+    fovTo: number;
+    lift: number;
+    /** Orbit buttons: turn round the target by this angle instead of a straight line. */
+    orbit?: number;
+    done?: () => void;
   } | null = null;
+  const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
   function cancelFlight() {
     flight = null;
   }
   controls.addEventListener("start", cancelFlight);
-  function flyTo(position: THREE.Vector3, target: THREE.Vector3) {
+  function flyTo(
+    position: THREE.Vector3,
+    target: THREE.Vector3,
+    options: { fov?: number; duration?: number; orbit?: number; done?: () => void } = {},
+  ) {
     controls.enableDamping = false;
     controls.update();
     controls.enableDamping = true;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const fovTo = options.fov ?? camera.fov;
+    if (!rendered || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      flight = null;
       camera.position.copy(position);
       controls.target.copy(target);
+      camera.fov = fovTo;
+      camera.updateProjectionMatrix();
       controls.update();
+      options.done?.();
       return;
     }
+    const distance = Math.max(camera.position.distanceTo(position), controls.target.distanceTo(target));
     flight = {
       start: performance.now(),
+      duration: options.duration ?? THREE.MathUtils.clamp(450 + distance * 18, 650, 1500),
       from: camera.position.clone(),
-      to: position,
+      to: position.clone(),
       targetFrom: controls.target.clone(),
-      targetTo: target,
+      targetTo: target.clone(),
+      fovFrom: camera.fov,
+      fovTo,
+      lift: options.orbit === undefined ? Math.min(3, distance * 0.12) : 0,
+      orbit: options.orbit,
+      done: options.done,
     };
   }
+  /** False until the first frame is drawn: the opening view is placed, not flown. */
+  let rendered = false;
   function focusObject(id: string, boxId?: string | null) {
     const inspectBox = !!boxId && isolatedId === boxId;
     const object = boxId ? packages.get(boxId) : groups.get(id);
@@ -724,8 +752,6 @@ export function createOffice(
     detail = true;
     atOverview = false;
     controls.enableRotate = true;
-    camera.fov = 42;
-    camera.updateProjectionMatrix();
     const sphere = bounds(object),
       target = sphere.center;
     // Keep the normal view straight-on, framing a box with its shelf around it.
@@ -743,7 +769,7 @@ export function createOffice(
       : sphere.radius;
 
     const distance = framingDistance(radius, 42, camera.aspect);
-    flyTo(target.clone().addScaledVector(direction, distance), target);
+    flyTo(target.clone().addScaledVector(direction, distance), target, { fov: 42 });
   }
   const ray = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
@@ -1018,14 +1044,18 @@ export function createOffice(
   // refitted when a panel opens or the window changes, until you move it.
   let atOverview = true;
   const fitter = new THREE.PerspectiveCamera();
-  const hallCorners = [-18, 18].flatMap((x) => [0, 3.2].flatMap((y) => [-12, 12].map((z) => new THREE.Vector3(x, y, z))));
+  // the hall plus the corridor and small offices behind its north wall
+  const hallCorners = [-18, 18].flatMap((x) => [0, 3.2].flatMap((y) => [-20, 12].map((z) => new THREE.Vector3(x, y, z))));
   const OVERVIEW_DIR = OVERVIEW.clone().sub(HALL_CENTER).normalize();
   // On tall screens (phones) look along the hall from its east end, so its
   // long side runs up the screen instead of shrinking to fit the width.
   const OVERVIEW_TALL_DIR = new THREE.Vector3(40, 46, 12).normalize();
   const PLAN_DIR = PLAN.clone().sub(HALL_CENTER).normalize();
-  function overviewPosition(plan: boolean) {
-    fitter.fov = camera.fov;
+  function overviewFov(plan: boolean) {
+    return plan ? 30 : viewW < 600 ? 50 : 36;
+  }
+  function overviewPosition(plan: boolean, fov = camera.fov) {
+    fitter.fov = fov;
     fitter.aspect = camera.aspect;
     fitter.updateProjectionMatrix();
     const dir = plan ? PLAN_DIR : camera.aspect < 0.9 ? OVERVIEW_TALL_DIR : OVERVIEW_DIR;
@@ -1074,17 +1104,32 @@ export function createOffice(
   renderer.setAnimationLoop(() => {
     if (document.hidden) return;
     if (flight) {
-      const t = Math.min(1, (performance.now() - flight.start) / 320);
-      const eased = 1 - Math.pow(1 - t, 3);
-      camera.position.lerpVectors(flight.from, flight.to, eased);
-      controls.target.lerpVectors(flight.targetFrom, flight.targetTo, eased);
-      if (t === 1) flight = null;
+      const t = Math.min(1, (performance.now() - flight.start) / flight.duration);
+      const e = easeInOut(t);
+      controls.target.lerpVectors(flight.targetFrom, flight.targetTo, e);
+      if (flight.orbit !== undefined) {
+        const offset = flight.from.clone().sub(flight.targetFrom).applyAxisAngle(THREE.Object3D.DEFAULT_UP, flight.orbit * e);
+        camera.position.copy(controls.target).add(offset);
+      } else {
+        camera.position.lerpVectors(flight.from, flight.to, e);
+        camera.position.y += flight.lift * Math.sin(Math.PI * t);
+      }
+      if (flight.fovFrom !== flight.fovTo) {
+        camera.fov = THREE.MathUtils.lerp(flight.fovFrom, flight.fovTo, e);
+        camera.updateProjectionMatrix();
+      }
+      if (t === 1) {
+        const done = flight.done;
+        flight = null;
+        done?.();
+      }
     }
     controls.update();
     // Close up on a shelf or box, see through any hall furniture in the way.
     verlet.cutaway(detail ? camera.position : null, controls.target);
     placeTags();
     renderer.render(scene, camera);
+    rendered = true;
   });
   return {
     itemDrop(callback: (move: ItemTransfer, target: BoxAddress) => void) {
@@ -1191,29 +1236,35 @@ export function createOffice(
       focusAnchor = null;
       isolateBox(null);
       controls.enableRotate = !plan;
-      fitProjection();
-      frameOverview(plan);
+      const fov = overviewFov(plan);
+      flyTo(overviewPosition(plan, fov), HALL_CENTER, {
+        fov,
+        done: () => {
+          atOverview = true;
+          // A panel may have opened during the flight: settle into the new size.
+          const settled = overviewPosition(plan, overviewFov(plan));
+          if (settled.distanceTo(camera.position) > 0.5)
+            flyTo(settled, HALL_CENTER, { fov: overviewFov(plan), duration: 450 });
+        },
+      });
     },
     zoom(factor: number) {
-      cancelFlight();
       atOverview = false;
-      const delta = camera.position.clone().sub(controls.target);
-      camera.position
-        .copy(controls.target)
-        .add(delta.setLength(clampZoomDistance(delta.length() * factor)));
-      controls.update();
+      // Repeated clicks build on where the camera is heading, not where it is.
+      const target = (flight?.targetTo ?? controls.target).clone();
+      const delta = (flight?.to ?? camera.position).clone().sub(target);
+      const position = target.clone().add(delta.setLength(clampZoomDistance(delta.length() * factor)));
+      flyTo(position, target, { duration: 420 });
     },
     focus(id: string, boxId?: string | null) {
       focusObject(id, boxId);
     },
     orbit(angle: number) {
-      cancelFlight();
       atOverview = false;
       if (!controls.enableRotate) return;
-      const offset = camera.position.clone().sub(controls.target);
-      offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
-      camera.position.copy(controls.target).add(offset);
-      controls.update();
+      const target = controls.target.clone();
+      const position = target.clone().add(camera.position.clone().sub(target).applyAxisAngle(THREE.Object3D.DEFAULT_UP, angle));
+      flyTo(position, target, { orbit: angle, duration: 520 });
     },
     dispose() {
       disposed = true;

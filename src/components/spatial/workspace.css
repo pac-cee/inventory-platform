@@ -1619,3 +1619,23 @@
 .spatial-tag.is-selected {
   z-index: 3;
 }
+/* Tags fade out while you look at a shelf close up, and back in after. */
+.spatial-tags {
+  transition:
+    opacity 0.25s ease,
+    visibility 0s linear 0s;
+}
+.spatial-tags.is-off {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.25s ease,
+    visibility 0s linear 0.25s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .spatial-tags,
+  .spatial-tags.is-off,
+  .spatial-tag {
+    transition: none;
+  }
+}
