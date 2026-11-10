@@ -408,7 +408,12 @@ export function createOffice(
   const rings = new Map<string, THREE.Mesh>();
   const groups = new Map<string, THREE.Group>();
   const POST = "#46544d", BEAM = "#56665d", FOOT = "#2f3833", DECK = "#e4cfac";
+  // The old website's steel racks (and their boxes) are hidden: the map shows
+  // the Verlet hall as it is on the 3D floor site. Set to true to bring them
+  // back; inventory, boxes and locations are unaffected either way.
+  const SHOW_RACKS = false;
   for (const shelf of shelves) {
+    if (shelf.kind !== "table" && !SHOW_RACKS) continue;
     const group = new THREE.Group();
     group.position.set(shelf.x, 0, shelf.z);
     group.rotation.y = THREE.MathUtils.degToRad(shelf.rotation);
