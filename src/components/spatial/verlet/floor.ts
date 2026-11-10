@@ -4,9 +4,8 @@
 // a louvred band, frosted east partition with a glass door, pine wall shelving)
 // with its desks and benches, inside the office block above the street.
 //
-// The inventory floor (shelves, boxes, routes) keeps its own coordinates
-// round the origin; the hall is shifted so that floor lands in the stockroom
-// corner, and nothing from the hall is placed on top of it.
+// The whole 5190 floor plan is placed as it is there: every zone, desk,
+// bench, column and the pine stockroom shelving.
 //
 // Everything here is static, so it is merged into one mesh per material:
 // about a dozen draw calls for the whole building.
@@ -15,7 +14,7 @@ import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import * as T from "./textures.js";
 import { kitGeometry } from "./kit.js";
 
-/** World = hall + HALL_OFFSET; hall (-8, -5) is the inventory floor's origin. */
+/** World = hall + HALL_OFFSET (the office map's camera and routes use world space). */
 export const HALL_OFFSET = new THREE.Vector3(8, 0, 5);
 /** The hall's centre in world space, for framing and the sun. */
 export const HALL_CENTER = HALL_OFFSET.clone();
@@ -69,21 +68,6 @@ const TREES = [
   [-26, 20], [-12, 20.5], [2, 20], [18, 20.5], [32, 20],
   [48, 20.5], [-28, 4], [52, 2], [-28, -14], [52, -14],
 ];
-/** The inventory floor's footprint in hall space; the hall leaves it clear. */
-const KEEP_OUT = { x0: -17.6, x1: 1.6, z0: -11.6, z1: 1.6 };
-/** Furniture also stays out of the aisle in front, where the camera stands to
- *  frame a shelf, so no desk ends up between you and the box you picked. */
-const AISLE = { x0: -17.6, x1: 3.2, z0: -11.6, z1: 5.6 };
-
-// Footprints (w × d) of the furniture kit, from mockup/src/data.js.
-const KIT: Record<string, [number, number]> = {
-  workstation: [1.6, 1.5], bench: [2.0, 1.0], printer: [0.8, 0.7],
-  shelf: [1.3, 0.6], heavyRack: [2.6, 1.1], robotCell: [1.8, 1.4],
-  amr: [0.8, 0.6], server: [0.7, 1.1], meeting: [2.8, 1.8], sofa: [2.0, 0.9],
-  board: [1.9, 0.5], tv: [1.3, 0.6], plant: [0.6, 0.6], fan: [0.5, 0.5],
-  bin: [0.6, 0.65], ladder: [0.6, 1.0], plywood: [2.6, 0.5],
-  frontDesk: [2.6, 1.2], cases: [1.4, 0.9], pallet: [1.3, 1.1],
-};
 
 /** The default floor plan from mockup/src/data.js, in zone-local metres. */
 function furniture() {
@@ -101,10 +85,14 @@ function furniture() {
   add("soft", "fan", 4.0, 0.8);
   add("soft", "plant", 12.4, -0.6);
   [-0.8, 2.4, 4.9].forEach((x) => add("robo", "robotCell", x, -2.8));
+  add("robo", "shelf", -5.0, -3.45, 0);
+  add("robo", "shelf", -3.6, -3.45, 0);
   add("robo", "amr", 0.5, 1.2, 0.5);
   add("robo", "amr", 2.6, 3.0, -0.4);
+  add("robo", "workstation", -4.6, 1.8, 0);
   add("robo", "workstation", 0.8, 2.6, 0);
   add("robo", "server", 5.2, 3.0, -Math.PI / 2);
+  add("robo", "board", -5.6, -0.5, Math.PI / 2);
   [-4.2, -3.35, -2.5, -1.65].forEach((x) => add("hard", "printer", x, -4.4));
   add("hard", "bench", 1.4, -4.3);
   add("hard", "bench", 3.6, -4.3);
@@ -120,6 +108,12 @@ function furniture() {
   add("field", "bench", 2.4, 1.8);
   add("field", "plywood", -3.4, 4.1, R);
   add("field", "ladder", 4.0, 3.6);
+  add("stock", "heavyRack", 3.6, -3.35, 0);
+  add("stock", "bench", 0.4, -0.6);
+  add("stock", "bench", 2.7, -0.6);
+  add("stock", "workstation", 3.2, 2.6, R);
+  add("stock", "pallet", -4.4, 2.6);
+  add("stock", "bin", 6.3, 3.4);
   return P;
 }
 
@@ -127,8 +121,6 @@ function hash(i: number) {
   const x = Math.sin(i * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
 }
-const clear = (x0: number, x1: number, z0: number, z1: number, area = KEEP_OUT) =>
-  x1 < area.x0 || x0 > area.x1 || z1 < area.z0 || z0 > area.z1;
 
 /** Per-vertex metalness/roughness, so one material serves wood, paint and aluminium. */
 function surfaceShader(material: THREE.MeshStandardMaterial, key: string) {
@@ -367,8 +359,7 @@ export function createVerletFloor() {
   P(box(WT + 0.01, 0.03, AREA.z1 - AREA.z0, AREA.x0 + WT / 2, CEILING + 0.015, 0), "#3c4641");
   for (let x = AREA.x0 + GRID; x < AREA.x1 - 0.1; x += GRID)
     for (let z = AREA.z0 + GRID; z < AREA.z1 - 0.1; z += GRID)
-      if (clear(x - 0.25, x + 0.25, z - 0.25, z + 0.25))
-        P(box(0.5, CEILING, 0.5, x, CEILING / 2, z), "#8fb0bd");
+      P(box(0.5, CEILING, 0.5, x, CEILING / 2, z), "#8fb0bd");
   for (let x = AREA.x0 + 0.75; x < AREA.x1; x += 1.5)
     for (let k = 0; k < 6; k++)
       P(box(1.42, 0.03, 0.06, x, CEILING - 0.08 - k * 0.07, AREA.z1 - 0.12), "#e9ebec", 0, 0.6);
@@ -446,15 +437,10 @@ export function createVerletFloor() {
   });
   bake(tags, new THREE.MeshStandardMaterial({ map: atlas.texture, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -1 }), false);
 
-  // ---- furniture: the 5190 floor plan, minus anything on the inventory floor ------
+  // ---- furniture: the 5190 floor plan ---------------------------------------------
   for (const [zone, kind, lx, lz, rot] of furniture()) {
     const [zx, zz] = ZONES[zone];
-    const x = zx + lx, z = zz + lz;
-    const [w, d] = KIT[kind];
-    const turned = Math.abs(Math.sin(rot)) > 0.5;
-    const hw = (turned ? d : w) / 2, hd = (turned ? w : d) / 2;
-    if (!clear(x - hw, x + hw, z - hd, z + hd, AISLE)) continue;
-    P(placed(kitGeometry(kind).clone(), x, 0, z, rot), "#ffffff", 0.05, 0.62);
+    P(placed(kitGeometry(kind).clone(), zx + lx, 0, zz + lz, rot), "#ffffff", 0.05, 0.62);
   }
 
   bake(painted, paintMat, true);

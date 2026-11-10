@@ -318,7 +318,14 @@ export function createOffice(
     return mesh;
   }
 
-  // ---- the inventory floor's own fittings (the hall round it comes from verlet/floor)
+  // ---- the old office map's room (racks, tables, glass partition, plants,
+  // entrance marker, floor labels). Hidden: the map shows only the Verlet
+  // floor from the 3D floor site. Set SHOW_OLD_FLOOR to true to bring it back;
+  // inventory, boxes and locations data are unaffected either way.
+  const SHOW_OLD_FLOOR = false;
+  const oldFloor = new THREE.Group();
+  oldFloor.visible = SHOW_OLD_FLOOR;
+  scene.add(oldFloor);
   const shell: THREE.BufferGeometry[] = [];
   // Glass partition frames, with a walk-through opening.
   for (const x of [-6.5, -2.5])
@@ -363,26 +370,26 @@ export function createOffice(
   plant(-8.8, 5.7);
   plant(8.8, -5.7);
   plant(8.8, 5.7);
-  bake(scene, shell, paint);
+  bake(oldFloor, shell, paint);
   for (const [x, z] of [
     [-8.8, 5.7],
     [8.8, -5.7],
     [8.8, 5.7],
   ])
-    contactShadow(scene, 1.3, 1.3, 0.052).position.set(x, 0.052, z);
+    contactShadow(oldFloor, 1.3, 1.3, 0.052).position.set(x, 0.052, z);
 
   // The hall's tiles are the floor; this stands in for the old floor slab,
   // which a custom floor-plan image used to hide.
   const floor = new THREE.Object3D();
 
-  const entrance = label(scene, "ENTRANCE", 0, 0.09, 6.5, 2.2, true);
+  const entrance = label(oldFloor, "ENTRANCE", 0, 0.09, 6.5, 2.2, true);
   entrance.rotation.x = -Math.PI / 2;
   const startMarker = new THREE.Mesh(
     new THREE.CylinderGeometry(0.18, 0.18, 0.035, 24),
     new THREE.MeshBasicMaterial({ color: 0xdc7298 }),
   );
   startMarker.position.set(0, 0.1, 6);
-  scene.add(startMarker);
+  oldFloor.add(startMarker);
   const glass = new THREE.MeshStandardMaterial({
     color: 0xd4e6e0,
     transparent: true,
@@ -394,11 +401,11 @@ export function createOffice(
   for (const x of [-6.5, -2.5]) {
     const panel = new THREE.Mesh(new THREE.BoxGeometry(3.5, 2.1, 0.03), glass);
     panel.position.set(x, 1.1, 0.8);
-    scene.add(panel);
+    oldFloor.add(panel);
   }
-  const roomLabel = label(scene, "STORAGE / 01", -4.4, 0.08, -5.8, 3.2);
+  const roomLabel = label(oldFloor, "STORAGE / 01", -4.4, 0.08, -5.8, 3.2);
   roomLabel.rotation.x = -Math.PI / 2;
-  const labLabel = label(scene, "WORKSPACE / 02", 4.7, 0.08, 5.6, 3.5);
+  const labLabel = label(oldFloor, "WORKSPACE / 02", 4.7, 0.08, 5.6, 3.5);
   labLabel.rotation.x = -Math.PI / 2;
 
   const targets: THREE.Object3D[] = [];
@@ -408,12 +415,9 @@ export function createOffice(
   const rings = new Map<string, THREE.Mesh>();
   const groups = new Map<string, THREE.Group>();
   const POST = "#46544d", BEAM = "#56665d", FOOT = "#2f3833", DECK = "#e4cfac";
-  // The old website's steel racks (and their boxes) are hidden: the map shows
-  // the Verlet hall as it is on the 3D floor site. Set to true to bring them
-  // back; inventory, boxes and locations are unaffected either way.
-  const SHOW_RACKS = false;
   for (const shelf of shelves) {
-    if (shelf.kind !== "table" && !SHOW_RACKS) continue;
+    // Racks and tables belong to the old room (see SHOW_OLD_FLOOR).
+    if (!SHOW_OLD_FLOOR) continue;
     const group = new THREE.Group();
     group.position.set(shelf.x, 0, shelf.z);
     group.rotation.y = THREE.MathUtils.degToRad(shelf.rotation);
