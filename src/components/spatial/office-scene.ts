@@ -11,6 +11,14 @@ import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import {
+  createVerletFloor,
+  skyTexture,
+  HALL_CENTER,
+  HALL_HALF_WIDTH,
+  SKY,
+  SUN_DIRECTION,
+} from "./verlet/floor";
+import {
   framingDistance,
   clampZoomDistance,
   followObject,
@@ -26,9 +34,15 @@ export function createOffice(
   select: (id: string, boxId?: string) => void,
 ) {
   const scene = new THREE.Scene();
-  const BACKDROP = "#e7e9e6";
-  scene.background = new THREE.Color(BACKDROP);
-  scene.fog = new THREE.Fog(BACKDROP, 60, 150);
+  // Verlet's floor from the 3D floor site, high up in its office block.
+  const sky = skyTexture();
+  scene.background = sky;
+  scene.fog = new THREE.Fog(SKY.horizon, 90, 300);
+  const verlet = createVerletFloor();
+  scene.add(verlet.group);
+  // Overview framing: the whole hall, seen from the south-east like the 5190 site.
+  const OVERVIEW = HALL_CENTER.clone().add(new THREE.Vector3(30, 34, 40));
+  const PLAN = HALL_CENTER.clone().add(new THREE.Vector3(0, 56, 0.01));
   const renderer = new THREE.WebGLRenderer({
     antialias: true,
     powerPreference: "high-performance",
@@ -39,7 +53,7 @@ export function createOffice(
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.96;
+  renderer.toneMappingExposure = 1.0;
   renderer.domElement.setAttribute(
     "aria-label",
     "Interactive 3D office. Drag to orbit, scroll to zoom. Select a box to focus it. Use Inspect box for an unobstructed full orbit. Equivalent box controls are in the location list.",
@@ -47,10 +61,10 @@ export function createOffice(
   renderer.domElement.style.touchAction = "none";
   renderer.domElement.tabIndex = 0;
   host.appendChild(renderer.domElement);
-  const camera = new THREE.PerspectiveCamera(36, 1, 0.02, 200);
-  camera.position.set(22, 23, 27);
+  const camera = new THREE.PerspectiveCamera(36, 1, 0.02, 320);
+  camera.position.copy(OVERVIEW);
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.set(0, 0, 0);
+  controls.target.copy(HALL_CENTER);
   controls.enableDamping = true;
   controls.minDistance = 0.45;
   controls.maxDistance = 80;
@@ -67,19 +81,24 @@ export function createOffice(
   room.dispose();
   pmrem.dispose();
   scene.environment = environment;
-  scene.environmentIntensity = 0.42;
-  scene.add(new THREE.HemisphereLight(0xfbfbf6, 0x8f9a91, 0.75));
-  const sun = new THREE.DirectionalLight(0xffeed6, 3.6);
-  sun.position.set(-9, 22, 12);
+  scene.environmentIntensity = 0.45;
+  scene.add(new THREE.HemisphereLight(0xdfe6ef, 0x7a6a58, 0.75));
+  // One sun, its shadow box fitted round the whole hall.
+  const sun = new THREE.DirectionalLight(0xfff0dc, 2.7);
+  sun.target.position.copy(HALL_CENTER);
+  sun.position.copy(HALL_CENTER).addScaledVector(SUN_DIRECTION, 90);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -18;
-  sun.shadow.camera.right = 18;
-  sun.shadow.camera.top = 18;
-  sun.shadow.camera.bottom = -18;
+  sun.shadow.camera.left = -24;
+  sun.shadow.camera.right = 24;
+  sun.shadow.camera.top = 24;
+  sun.shadow.camera.bottom = -24;
+  sun.shadow.camera.near = 20;
+  sun.shadow.camera.far = 170;
+  sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.03;
   sun.shadow.radius = 3;
-  scene.add(sun);
+  scene.add(sun, sun.target);
 
   // ---- surfaces, drawn once on canvases so nothing extra is downloaded
   const maxAniso = Math.min(4, renderer.capabilities.getMaxAnisotropy());
@@ -110,30 +129,6 @@ export function createOffice(
     }
     ctx.globalAlpha = 1;
   }
-  // Polished concrete tiles: one canvas holds 2 × 2 tiles of 1 m.
-  const floorMap = surface(
-    512,
-    (ctx, s) => {
-      ctx.fillStyle = "#e8e4da";
-      ctx.fillRect(0, 0, s, s);
-      for (let i = 0; i < 26; i++) {
-        const x = rand() * s, y = rand() * s, r = 40 + rand() * 120;
-        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-        const tone = rand() > 0.5 ? "204,197,184" : "250,248,243";
-        g.addColorStop(0, `rgba(${tone},0.5)`);
-        g.addColorStop(1, `rgba(${tone},0)`);
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, s, s);
-      }
-      speckle(ctx, s, 9000, "#9c958a", "#ffffff");
-      ctx.fillStyle = "rgba(118,112,102,0.75)";
-      for (const p of [0, s / 2]) {
-        ctx.fillRect(p, 0, 2, s);
-        ctx.fillRect(0, p, s, 2);
-      }
-    },
-    [10, 7],
-  );
   // Kraft cardboard: near-white fibres, tinted per box by vertex colour.
   const kraftMap = surface(256, (ctx, s) => {
     ctx.fillStyle = "#f4efe6";
@@ -323,39 +318,8 @@ export function createOffice(
     return mesh;
   }
 
-  // ---- the room: a cutaway shell, front walls left low so the floor stays visible
-  const WALL = "#f7f6f0", SIDE_WALL = "#eceee7", CUT = "#3c4641", PANE = "#dde8ea";
-  const shell: THREE.BufferGeometry[] = [
-    slab(21, 0.6, 15, "#c8cfca", 0, -0.3, 0),
-    slab(21.08, 0.04, 15.08, "#aeb7b1", 0, -0.58, 0),
-  ];
-  /** A full-height wall with a band of windows; `axis` is the direction it runs. */
-  function windowWall(cx: number, cz: number, length: number, axis: "x" | "z", color: string) {
-    const along = (offset: number, w: number, h: number, d: number, c: string, y: number) =>
-      axis === "x"
-        ? slab(w, h, d, c, cx + offset, y, cz)
-        : slab(d, h, w, c, cx, y, cz + offset);
-    shell.push(
-      along(0, length, 0.95, 0.15, color, 0.475),
-      along(0, length, 0.25, 0.15, color, 2.175),
-      along(0, length, 0.04, 0.16, CUT, 2.32),
-      along(0, length, 0.08, 0.17, "#cfd3cc", 0.04),
-    );
-    const bays = Math.round(length / 2.5);
-    for (let i = 0; i < bays; i++) {
-      const offset = -length / 2 + (i + 0.5) * (length / bays);
-      shell.push(along(offset, length / bays - 0.08, 1.1, 0.05, PANE, 1.5));
-    }
-    for (let i = 0; i <= bays; i++)
-      shell.push(along(-length / 2 + i * (length / bays), 0.08, 1.12, 0.17, "#7e8c83", 1.5));
-    shell.push(along(0, length, 0.05, 0.22, "#e3e2db", 0.95));
-  }
-  windowWall(0, -7, 20, "x", WALL);
-  windowWall(-10, 0, 14.15, "z", SIDE_WALL);
-  // Low cut walls on the open sides, capped dark like an architectural section.
-  shell.push(slab(0.15, 0.44, 14, WALL, 10, 0.22, 0), slab(0.16, 0.03, 14, CUT, 10, 0.455, 0));
-  for (const x of [-5.5, 5.5])
-    shell.push(slab(9, 0.44, 0.15, WALL, x, 0.22, 7), slab(9, 0.03, 0.16, CUT, x, 0.455, 7));
+  // ---- the inventory floor's own fittings (the hall round it comes from verlet/floor)
+  const shell: THREE.BufferGeometry[] = [];
   // Glass partition frames, with a walk-through opening.
   for (const x of [-6.5, -2.5])
     for (const dx of [-1.75, 1.75]) shell.push(slab(0.05, 2.2, 0.08, "#7e8c83", x + dx, 1.1, 0.8));
@@ -407,21 +371,9 @@ export function createOffice(
   ])
     contactShadow(scene, 1.3, 1.3, 0.052).position.set(x, 0.052, z);
 
-  const floor = new THREE.Mesh(
-    new THREE.BoxGeometry(20, 0.05, 14),
-    new THREE.MeshStandardMaterial({ map: floorMap, roughness: 0.42, metalness: 0 }),
-  );
-  floor.position.set(0, 0.02, 0);
-  floor.receiveShadow = true;
-  scene.add(floor);
-  const groundPlane = new THREE.Mesh(
-    new THREE.PlaneGeometry(200, 200),
-    new THREE.MeshStandardMaterial({ color: BACKDROP, roughness: 1 }),
-  );
-  groundPlane.rotation.x = -Math.PI / 2;
-  groundPlane.position.y = -0.65;
-  groundPlane.receiveShadow = true;
-  scene.add(groundPlane);
+  // The hall's tiles are the floor; this stands in for the old floor slab,
+  // which a custom floor-plan image used to hide.
+  const floor = new THREE.Object3D();
 
   const entrance = label(scene, "ENTRANCE", 0, 0.09, 6.5, 2.2, true);
   entrance.rotation.x = -Math.PI / 2;
@@ -1029,7 +981,7 @@ export function createOffice(
     camera.aspect = width / Math.max(1, height);
     const distance = camera.position.distanceTo(controls.target);
     const fit = THREE.MathUtils.radToDeg(
-      2 * Math.atan(11 / (Math.max(1, distance) * camera.aspect)),
+      2 * Math.atan(HALL_HALF_WIDTH / (Math.max(1, distance) * camera.aspect)),
     );
     camera.fov = detail
       ? 42
@@ -1177,10 +1129,8 @@ export function createOffice(
       detail = false;
       focusAnchor = null;
       isolateBox(null);
-      controls.target.set(0, 0, 0);
-      camera.position.set(
-        ...((plan ? [0, 32, 0.01] : [22, 23, 27]) as [number, number, number]),
-      );
+      controls.target.copy(HALL_CENTER);
+      camera.position.copy(plan ? PLAN : OVERVIEW);
       controls.enableRotate = !plan;
       controls.update();
       fitProjection();
@@ -1240,6 +1190,8 @@ export function createOffice(
       textures.forEach((t) => t.dispose());
       mats.forEach((m) => m.dispose());
       sun.shadow.dispose();
+      verlet.dispose();
+      sky.dispose();
       environment.dispose();
       renderer.dispose();
       renderer.domElement.remove();
