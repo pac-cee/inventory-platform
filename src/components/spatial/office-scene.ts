@@ -16,7 +16,6 @@ import {
   createVerletFloor,
   skyTexture,
   HALL_CENTER,
-  HALL_HALF_WIDTH,
   SKY,
   SUN_DIRECTION,
 } from "./verlet/floor";
@@ -84,7 +83,7 @@ export function createOffice(
   controls.target.copy(HALL_CENTER);
   controls.enableDamping = true;
   controls.minDistance = 0.45;
-  controls.maxDistance = 80;
+  controls.maxDistance = clampZoomDistance(Infinity);
   controls.minPolarAngle = 0.01;
   controls.maxPolarAngle = Math.PI - 0.01;
   controls.minAzimuthAngle = -Infinity;
@@ -443,6 +442,7 @@ export function createOffice(
       boxOutlines.set(storage.id, outline);
     });
     label(group, shelf.name, 0, top + 0.2, 0, SHELF.w - 0.1, true);
+    group.userData.tagY = top + 0.55;
     const ring = new THREE.Mesh(
       new THREE.BoxGeometry(SHELF.w + 0.5, 0.035, SHELF.d + 0.9),
       new THREE.MeshBasicMaterial({
@@ -464,6 +464,109 @@ export function createOffice(
     group.add(hit);
     targets.push(hit);
   }
+  // ---- name tags: every inventory shelf is named and clickable from any view,
+  // so you never have to hunt for which piece of furniture holds your stock.
+  const tagLayer = document.createElement("div");
+  tagLayer.className = "spatial-tags";
+  host.appendChild(tagLayer);
+  let selectedShelf: string | null = null;
+  let hoveredShelf: string | null = null;
+  const tags = new Map<string, { el: HTMLButtonElement; group: THREE.Group; w: number; h: number }>();
+  for (const shelf of shelves) {
+    const group = groups.get(shelf.id);
+    if (shelf.kind === "table" || !group) continue;
+    const boxes = shelf.boxes?.length ?? 0;
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "spatial-tag";
+    if (!shelf.items.some((i) => i.quantity > 0)) el.classList.add("is-empty");
+    const name = document.createElement("span");
+    name.textContent = shelf.name;
+    const count = document.createElement("span");
+    count.className = "spatial-tag-count";
+    count.textContent = String(boxes);
+    el.append(name, count);
+    el.setAttribute("aria-label", `Open ${shelf.name}, ${boxes} ${boxes === 1 ? "box" : "boxes"}`);
+    el.addEventListener("click", (event) => {
+      event.stopPropagation();
+      select(shelf.id);
+    });
+    el.addEventListener("pointerenter", () => setHover(shelf.id));
+    el.addEventListener("pointerleave", () => setHover(null));
+    tagLayer.appendChild(el);
+    tags.set(shelf.id, { el, group, w: 0, h: 0 });
+  }
+  let viewW = 1, viewH = 1;
+  const tagPoint = new THREE.Vector3();
+  const placed: [number, number, number, number][] = [];
+  function placeTags() {
+    const show = !detail && !inspection;
+    tagLayer.style.display = show ? "" : "none";
+    if (!show) return;
+    // Nearest and selected first; a tag that would overlap one already placed
+    // waits until you zoom in, so the view never turns into a pile of labels.
+    const order = [...tags.entries()]
+      .map(([id, t]) => {
+        t.group.getWorldPosition(tagPoint);
+        tagPoint.y += t.group.userData.tagY ?? 2;
+        const distance = tagPoint.distanceTo(camera.position);
+        tagPoint.project(camera);
+        return { id, t, x: (tagPoint.x + 1) * 0.5 * viewW, y: (1 - tagPoint.y) * 0.5 * viewH, z: tagPoint.z, distance };
+      })
+      .sort((a, b) =>
+        Number(b.id === selectedShelf) - Number(a.id === selectedShelf) ||
+        Number(b.id === hoveredShelf) - Number(a.id === hoveredShelf) ||
+        a.distance - b.distance,
+      );
+    placed.length = 0;
+    // Every shelf keeps a reachable spot over it: no full tag may cover another
+    // shelf's dot.
+    const anchors = order.filter((o) => o.z <= 1).map((o) => ({ id: o.id, x: o.x, y: o.y - 7 }));
+    for (const { id, t, x, y, z } of order) {
+      if (!t.w) {
+        t.w = t.el.offsetWidth;
+        t.h = t.el.offsetHeight;
+      }
+      const left = x - t.w / 2, top = y - t.h - 4;
+      const off = z > 1 || x < 0 || x > viewW || y < 0 || y > viewH;
+      const clash =
+        placed.some(([l, tp, r, b]) => left < r && left + t.w > l && top < b && top + t.h > tp) ||
+        anchors.some((a) => a.id !== id && a.x > left - 8 && a.x < left + t.w + 8 && a.y > top - 8 && a.y < top + t.h + 8);
+      const full = !clash || id === selectedShelf || id === hoveredShelf;
+      t.el.classList.toggle("is-hidden", off);
+      // A tag with no room shrinks to a dot over its shelf; hover or zoom shows the name.
+      t.el.classList.toggle("is-dot", !off && !full);
+      t.el.classList.toggle("is-selected", id === selectedShelf);
+      t.el.classList.toggle("is-hover", id === hoveredShelf);
+      t.el.tabIndex = off ? -1 : 0;
+      if (off) continue;
+      if (full) {
+        placed.push([left - 4, top - 2, left + t.w + 4, top + t.h + 2]);
+        t.el.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+      } else t.el.style.transform = `translate(${Math.round(x - 7)}px, ${Math.round(y - 14)}px)`;
+    }
+  }
+  /** Selected shelf pink, hovered shelf lit, the rest tinted by stock. */
+  function paintRings() {
+    rings.forEach((ring, key) => {
+      const m = ring.material as THREE.MeshBasicMaterial;
+      const chosen = key === selectedShelf, lit = key === hoveredShelf;
+      m.opacity = chosen ? 0.8 : lit ? 0.55 : 0.2;
+      m.color.set(
+        chosen || lit
+          ? "#df799a"
+          : shelves.find((s) => s.id === key)?.items.some((i) => i.quantity > 0)
+            ? "#9db7a4"
+            : "#e9bc79",
+      );
+    });
+  }
+  function setHover(id: string | null) {
+    if (id === hoveredShelf) return;
+    hoveredShelf = id;
+    paintRings();
+  }
+
   const routeGroup = new THREE.Group();
   scene.add(routeGroup);
   function clearRoute() {
@@ -615,6 +718,7 @@ export function createOffice(
     if (!object) return;
     focusAnchor = { id, boxId };
     detail = true;
+    atOverview = false;
     controls.enableRotate = true;
     camera.fov = 42;
     camera.updateProjectionMatrix();
@@ -829,12 +933,16 @@ export function createOffice(
       }
       return;
     }
-    renderer.domElement.style.cursor = hitAt(e)
+    const hover = hitAt(e);
+    renderer.domElement.style.cursor = hover
       ? editing
         ? "move"
         : "pointer"
       : "grab";
+    setHover(hover?.shelfId ?? null);
   };
+  const onLeave = () => setHover(null);
+  renderer.domElement.addEventListener("pointerleave", onLeave);
   renderer.domElement.addEventListener("pointercancel", onCancel);
   renderer.domElement.addEventListener("pointerdown", onDown, true);
   renderer.domElement.addEventListener("pointerup", onUp);
@@ -895,23 +1003,59 @@ export function createOffice(
   renderer.domElement.addEventListener("drop", itemDrop);
   function fitProjection() {
     const { width, height } = host.getBoundingClientRect();
-    camera.aspect = width / Math.max(1, height);
-    const distance = camera.position.distanceTo(controls.target);
-    const fit = THREE.MathUtils.radToDeg(
-      2 * Math.atan(HALL_HALF_WIDTH / (Math.max(1, distance) * camera.aspect)),
-    );
-    camera.fov = detail
-      ? 42
-      : Math.max(
-          controls.enableRotate ? (width < 600 ? 55 : 36) : 30,
-          Math.min(75, fit),
-        );
+    viewW = Math.max(1, width);
+    viewH = Math.max(1, height);
+    camera.aspect = viewW / viewH;
+    // A fixed lens: zooming moves the camera, it never bends the room.
+    camera.fov = detail ? 42 : !controls.enableRotate ? 30 : width < 600 ? 50 : 36;
     camera.updateProjectionMatrix();
   }
+  // The overview always shows the whole hall, whatever the map's size: it is
+  // refitted when a panel opens or the window changes, until you move it.
+  let atOverview = true;
+  const fitter = new THREE.PerspectiveCamera();
+  const hallCorners = [-18, 18].flatMap((x) => [0, 3.2].flatMap((y) => [-12, 12].map((z) => new THREE.Vector3(x, y, z))));
+  const OVERVIEW_DIR = OVERVIEW.clone().sub(HALL_CENTER).normalize();
+  // On tall screens (phones) look along the hall from its east end, so its
+  // long side runs up the screen instead of shrinking to fit the width.
+  const OVERVIEW_TALL_DIR = new THREE.Vector3(40, 46, 12).normalize();
+  const PLAN_DIR = PLAN.clone().sub(HALL_CENTER).normalize();
+  function overviewPosition(plan: boolean) {
+    fitter.fov = camera.fov;
+    fitter.aspect = camera.aspect;
+    fitter.updateProjectionMatrix();
+    const dir = plan ? PLAN_DIR : camera.aspect < 0.9 ? OVERVIEW_TALL_DIR : OVERVIEW_DIR;
+    const fits = (d: number) => {
+      fitter.position.copy(HALL_CENTER).addScaledVector(dir, d);
+      fitter.lookAt(HALL_CENTER);
+      fitter.updateMatrixWorld();
+      return hallCorners.every((c) => {
+        const p = c.clone().project(fitter);
+        return Math.abs(p.x) <= 0.92 && Math.abs(p.y) <= 0.9 && p.z < 1;
+      });
+    };
+    let lo = 8, hi = clampZoomDistance(Infinity);
+    for (let i = 0; i < 24; i++) {
+      const mid = (lo + hi) / 2;
+      if (fits(mid)) hi = mid;
+      else lo = mid;
+    }
+    return HALL_CENTER.clone().addScaledVector(dir, hi);
+  }
+  function frameOverview(plan: boolean) {
+    controls.target.copy(HALL_CENTER);
+    camera.position.copy(overviewPosition(plan));
+    controls.update();
+    atOverview = true;
+  }
+  controls.addEventListener("start", () => {
+    atOverview = false;
+  });
   const resize = new ResizeObserver(() => {
     const { width, height } = host.getBoundingClientRect();
     renderer.setSize(width, height);
     fitProjection();
+    if (atOverview && !detail && !flight) frameOverview(!controls.enableRotate);
     const object = focusedObject();
     if (detail && object) {
       const offset = camera.position.clone().sub(controls.target);
@@ -935,6 +1079,7 @@ export function createOffice(
     controls.update();
     // Close up on a shelf or box, see through any hall furniture in the way.
     verlet.cutaway(detail ? camera.position : null, controls.target);
+    placeTags();
     renderer.render(scene, camera);
   });
   return {
@@ -964,19 +1109,8 @@ export function createOffice(
       boxOutlines.forEach((outline, key) => {
         outline.visible = key === boxId;
       });
-      rings.forEach((ring, key) => {
-        const m = ring.material as THREE.MeshBasicMaterial;
-        m.opacity = key === id ? 0.8 : 0.2;
-        m.color.set(
-          key === id
-            ? "#df799a"
-            : shelves
-                  .find((s) => s.id === key)
-                  ?.items.some((i) => i.quantity > 0)
-              ? "#9db7a4"
-              : "#e9bc79",
-        );
-      });
+      selectedShelf = id;
+      paintRings();
     },
     snapshot() {
       const object = focusedObject();
@@ -985,6 +1119,7 @@ export function createOffice(
         target: (flight?.targetTo ?? controls.target).toArray(),
         rotate: controls.enableRotate,
         detail,
+        overview: atOverview,
         anchor:
           object && focusAnchor
             ? {
@@ -1003,6 +1138,7 @@ export function createOffice(
       target: number[];
       rotate: boolean;
       detail?: boolean;
+      overview?: boolean;
       anchor?: {
         id: string;
         boxId?: string | null;
@@ -1042,20 +1178,21 @@ export function createOffice(
       controls.enableRotate = state.rotate;
       controls.update();
       fitProjection();
+      atOverview = !!state.overview && !detail;
+      if (atOverview) frameOverview(!state.rotate);
     },
     view(plan: boolean) {
       cancelFlight();
       detail = false;
       focusAnchor = null;
       isolateBox(null);
-      controls.target.copy(HALL_CENTER);
-      camera.position.copy(plan ? PLAN : OVERVIEW);
       controls.enableRotate = !plan;
-      controls.update();
       fitProjection();
+      frameOverview(plan);
     },
     zoom(factor: number) {
       cancelFlight();
+      atOverview = false;
       const delta = camera.position.clone().sub(controls.target);
       camera.position
         .copy(controls.target)
@@ -1067,6 +1204,7 @@ export function createOffice(
     },
     orbit(angle: number) {
       cancelFlight();
+      atOverview = false;
       if (!controls.enableRotate) return;
       const offset = camera.position.clone().sub(controls.target);
       offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
@@ -1087,6 +1225,8 @@ export function createOffice(
       renderer.domElement.removeEventListener("pointerdown", onDown, true);
       renderer.domElement.removeEventListener("pointerup", onUp);
       renderer.domElement.removeEventListener("pointermove", onMove);
+      renderer.domElement.removeEventListener("pointerleave", onLeave);
+      tagLayer.remove();
       const textures = new Set<THREE.Texture>();
       const mats = new Set<THREE.Material>();
       scene.traverse((object) => {

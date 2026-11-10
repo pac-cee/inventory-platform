@@ -1521,3 +1521,101 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Name tags pinned over each inventory shelf on the 3D map (office-scene.ts). */
+.spatial-tags {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+.spatial-tag {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-radius: 999px;
+  background: rgb(28 28 30 / 0.86);
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.18);
+  color: #fff;
+  font: 500 11px/1.2 var(--font-dm-sans), sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  will-change: transform;
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.spatial-tag::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #9db7a4;
+}
+.spatial-tag.is-empty::before {
+  background: #e9bc79;
+}
+.spatial-tag-count {
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.14);
+  font: 500 10px/1.3 var(--font-jetbrains-mono), monospace;
+  text-align: center;
+}
+.spatial-tag:hover,
+.spatial-tag.is-hover {
+  background: #1c1c1e;
+  box-shadow: 0 8px 20px rgb(0 0 0 / 0.28);
+}
+.spatial-tag.is-selected {
+  background: var(--highlight);
+  border-color: transparent;
+}
+.spatial-tag.is-selected::before {
+  background: #fff;
+}
+.spatial-tag:active {
+  box-shadow: 0 3px 8px rgb(0 0 0 / 0.2);
+}
+.spatial-tag:focus-visible {
+  outline: 2px solid var(--highlight);
+  outline-offset: 2px;
+}
+.spatial-tag.is-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+.spatial-tag.is-dot {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  justify-content: center;
+  gap: 0;
+  border: 2px solid #fff;
+}
+.spatial-tag.is-dot > span {
+  display: none;
+}
+.spatial-tag.is-dot::before {
+  width: 6px;
+  height: 6px;
+}
+/* Dots sit above full tags so they stay reachable; the active tag is on top. */
+.spatial-tag {
+  z-index: 1;
+}
+.spatial-tag.is-dot {
+  z-index: 2;
+}
+.spatial-tag.is-hover,
+.spatial-tag.is-selected {
+  z-index: 3;
+}

@@ -668,7 +668,10 @@ export function SpatialWorkspace({
             <VerletLogo className="size-6" />
             <div>
               <h1>Inventory</h1>
-              <span className="spatial-floor-label">Office · Ground floor</span>
+              <span className="spatial-floor-label">
+                Verlet floor · {shelves.length}{" "}
+                {shelves.length === 1 ? "shelf" : "shelves"}
+              </span>
             </div>
           </div>
           <div

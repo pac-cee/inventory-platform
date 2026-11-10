@@ -11,7 +11,7 @@ export function framingDistance(
   );
 }
 export function clampZoomDistance(distance: number): number {
-  return Math.max(0.45, Math.min(80, distance));
+  return Math.max(0.45, Math.min(140, distance));
 }
 export interface ObjectPose {
   position: number[];
