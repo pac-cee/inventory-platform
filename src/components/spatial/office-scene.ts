@@ -7,6 +7,9 @@ import { resolveSlots, occupiedLevels } from "@/lib/spatial/box-placement";
 import { shelfLevels, snapShelf } from "@/lib/spatial/builder";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import {
   framingDistance,
   clampZoomDistance,
@@ -23,14 +26,20 @@ export function createOffice(
   select: (id: string, boxId?: string) => void,
 ) {
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color("#e7e9e6");
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+  const BACKDROP = "#e7e9e6";
+  scene.background = new THREE.Color(BACKDROP);
+  scene.fog = new THREE.Fog(BACKDROP, 60, 150);
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    powerPreference: "high-performance",
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // PCFSoftShadowMap is gone in three r187; PCF with a radius gives the soft edge.
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.3;
+  renderer.toneMappingExposure = 0.96;
   renderer.domElement.setAttribute(
     "aria-label",
     "Interactive 3D office. Drag to orbit, scroll to zoom. Select a box to focus it. Use Inspect box for an unobstructed full orbit. Equivalent box controls are in the location list.",
@@ -50,8 +59,17 @@ export function createOffice(
   controls.minAzimuthAngle = -Infinity;
   controls.maxAzimuthAngle = Infinity;
   controls.update();
-  scene.add(new THREE.HemisphereLight(0xffffff, 0xa6afa7, 2.7));
-  const sun = new THREE.DirectionalLight(0xfff5e6, 4);
+
+  // ---- light: a soft studio environment for reflections and fill, one warm sun for shadows
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const room = new RoomEnvironment();
+  const environment = pmrem.fromScene(room, 0.04).texture;
+  room.dispose();
+  pmrem.dispose();
+  scene.environment = environment;
+  scene.environmentIntensity = 0.42;
+  scene.add(new THREE.HemisphereLight(0xfbfbf6, 0x8f9a91, 0.75));
+  const sun = new THREE.DirectionalLight(0xffeed6, 3.6);
   sun.position.set(-9, 22, 12);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -60,40 +78,196 @@ export function createOffice(
   sun.shadow.camera.top = 18;
   sun.shadow.camera.bottom = -18;
   sun.shadow.normalBias = 0.03;
+  sun.shadow.radius = 3;
   scene.add(sun);
-  const materials = new Map<string, THREE.MeshStandardMaterial>();
-  function material(color: string) {
-    if (!materials.has(color))
-      materials.set(
-        color,
-        new THREE.MeshStandardMaterial({
-          color,
-          roughness: 0.78,
-          metalness: 0.04,
-        }),
-      );
-    return materials.get(color)!;
+
+  // ---- surfaces, drawn once on canvases so nothing extra is downloaded
+  const maxAniso = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+  function surface(
+    size: number,
+    draw: (ctx: CanvasRenderingContext2D, s: number) => void,
+    repeat: [number, number] = [1, 1],
+  ) {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = size;
+    draw(canvas.getContext("2d")!, size);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(...repeat);
+    texture.anisotropy = maxAniso;
+    return texture;
   }
-  function box(
-    parent: THREE.Object3D,
+  // Seeded noise so the floor looks the same on every visit.
+  let seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  function speckle(ctx: CanvasRenderingContext2D, s: number, n: number, dark: string, light: string) {
+    for (let i = 0; i < n; i++) {
+      ctx.fillStyle = rand() > 0.5 ? dark : light;
+      ctx.globalAlpha = 0.05 + rand() * 0.08;
+      const r = 0.6 + rand() * 1.6;
+      ctx.fillRect(rand() * s, rand() * s, r, r);
+    }
+    ctx.globalAlpha = 1;
+  }
+  // Polished concrete tiles: one canvas holds 2 × 2 tiles of 1 m.
+  const floorMap = surface(
+    512,
+    (ctx, s) => {
+      ctx.fillStyle = "#e8e4da";
+      ctx.fillRect(0, 0, s, s);
+      for (let i = 0; i < 26; i++) {
+        const x = rand() * s, y = rand() * s, r = 40 + rand() * 120;
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        const tone = rand() > 0.5 ? "204,197,184" : "250,248,243";
+        g.addColorStop(0, `rgba(${tone},0.5)`);
+        g.addColorStop(1, `rgba(${tone},0)`);
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, s, s);
+      }
+      speckle(ctx, s, 9000, "#9c958a", "#ffffff");
+      ctx.fillStyle = "rgba(118,112,102,0.75)";
+      for (const p of [0, s / 2]) {
+        ctx.fillRect(p, 0, 2, s);
+        ctx.fillRect(0, p, s, 2);
+      }
+    },
+    [10, 7],
+  );
+  // Kraft cardboard: near-white fibres, tinted per box by vertex colour.
+  const kraftMap = surface(256, (ctx, s) => {
+    ctx.fillStyle = "#f4efe6";
+    ctx.fillRect(0, 0, s, s);
+    for (let x = 0; x < s; x += 6) {
+      ctx.fillStyle = "rgba(120,96,64,0.06)";
+      ctx.fillRect(x, 0, 2, s);
+    }
+    speckle(ctx, s, 2600, "#6b5236", "#ffffff");
+  });
+  // Birch plywood decks and table tops.
+  const plyMap = surface(256, (ctx, s) => {
+    ctx.fillStyle = "#f1e6d2";
+    ctx.fillRect(0, 0, s, s);
+    for (let y = 0; y < s; y += 3 + rand() * 5) {
+      ctx.strokeStyle = `rgba(150,112,66,${0.05 + rand() * 0.09})`;
+      ctx.lineWidth = 0.6 + rand() * 1.2;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      for (let x = 0; x <= s; x += 32) ctx.lineTo(x, y + Math.sin(x / 40 + y) * 2.2);
+      ctx.stroke();
+    }
+    speckle(ctx, s, 900, "#8a6a44", "#fffaf0");
+  });
+  const contactMap = surface(128, (ctx, s) => {
+    const g = ctx.createRadialGradient(s / 2, s / 2, s * 0.08, s / 2, s / 2, s / 2);
+    g.addColorStop(0, "rgba(28,36,32,0.55)");
+    g.addColorStop(0.55, "rgba(28,36,32,0.22)");
+    g.addColorStop(1, "rgba(28,36,32,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, s, s);
+  });
+  contactMap.wrapS = contactMap.wrapT = THREE.ClampToEdgeWrapping;
+
+  // One material per surface type; colour comes from the vertices, so each
+  // shelf, wall or plant is a single draw call however many parts it has.
+  const paint = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.84, metalness: 0 });
+  const kraft = new THREE.MeshStandardMaterial({ vertexColors: true, map: kraftMap, roughness: 0.92 });
+  // Racks and tables: steel and plywood in one mesh. A per-vertex "surface"
+  // attribute (metalness, roughness) picks steel or wood, and only wood takes
+  // the grain texture, so a whole rack is one draw call.
+  const rack = new THREE.MeshStandardMaterial({ vertexColors: true, map: plyMap, roughness: 1, metalness: 1 });
+  rack.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute vec2 surface;\nvarying vec2 vSurface;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvSurface = surface;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying vec2 vSurface;")
+      .replace(
+        "#include <map_fragment>",
+        "#ifdef USE_MAP\n  diffuseColor *= mix(texture2D(map, vMapUv), vec4(1.0), step(0.01, vSurface.x));\n#endif",
+      )
+      .replace("#include <metalnessmap_fragment>", "#include <metalnessmap_fragment>\nmetalnessFactor *= vSurface.x;")
+      .replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\nroughnessFactor *= vSurface.y;");
+  };
+  function surfaced(g: THREE.BufferGeometry, metal: boolean) {
+    const v = new Float32Array(g.attributes.position.count * 2);
+    for (let i = 0; i < v.length; i += 2) {
+      v[i] = metal ? 0.55 : 0;
+      v[i + 1] = metal ? 0.4 : 0.62;
+    }
+    g.setAttribute("surface", new THREE.BufferAttribute(v, 2));
+    return g;
+  }
+  const contact = new THREE.MeshBasicMaterial({
+    map: contactMap,
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+  });
+
+  const euler = new THREE.Euler(0, 0, 0, "YXZ");
+  const matrix = new THREE.Matrix4();
+  const quat = new THREE.Quaternion();
+  /** A geometry part placed in its parent's space and painted one colour. */
+  function part(
+    geometry: THREE.BufferGeometry,
+    color: string,
     x: number,
     y: number,
     z: number,
-    w: number,
-    h: number,
-    d: number,
-    color: string,
+    rx = 0,
+    ry = 0,
+    rz = 0,
+    sx = 1,
+    sy = 1,
+    sz = 1,
   ) {
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(w, h, d),
-      material(color),
+    const g = geometry.index ? geometry.toNonIndexed() : geometry;
+    if (g !== geometry) geometry.dispose();
+    for (const name of Object.keys(g.attributes))
+      if (!["position", "normal", "uv", "surface"].includes(name)) g.deleteAttribute(name);
+    quat.setFromEuler(euler.set(rx, ry, rz, "YXZ"));
+    g.applyMatrix4(
+      matrix.compose(new THREE.Vector3(x, y, z), quat, new THREE.Vector3(sx, sy, sz)),
     );
-    mesh.position.set(x, y, z);
-    mesh.castShadow = true;
+    const c = new THREE.Color(color);
+    const colors = new Float32Array(g.attributes.position.count * 3);
+    for (let i = 0; i < colors.length; i += 3) {
+      colors[i] = c.r;
+      colors[i + 1] = c.g;
+      colors[i + 2] = c.b;
+    }
+    g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    return g;
+  }
+  const slab = (w: number, h: number, d: number, color: string, x: number, y: number, z: number) =>
+    part(new THREE.BoxGeometry(w, h, d), color, x, y, z);
+  /** Merge parts into one mesh. */
+  function bake(
+    parent: THREE.Object3D,
+    parts: THREE.BufferGeometry[],
+    mat: THREE.Material,
+    cast = true,
+  ) {
+    const mesh = new THREE.Mesh(mergeGeometries(parts)!, mat);
+    parts.forEach((p) => p.dispose());
+    mesh.castShadow = cast;
     mesh.receiveShadow = true;
     parent.add(mesh);
     return mesh;
   }
+  function contactShadow(parent: THREE.Object3D, w: number, d: number, y = 0.05) {
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), contact);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.y = y;
+    mesh.renderOrder = -1;
+    parent.add(mesh);
+    return mesh;
+  }
+
+  const fontFamily =
+    getComputedStyle(document.body).fontFamily || "system-ui, sans-serif";
   function label(
     parent: THREE.Object3D,
     text: string,
@@ -102,45 +276,153 @@ export function createOffice(
     z: number,
     width = 2.5,
     dark = false,
+    sticker = false,
   ) {
     const canvas = document.createElement("canvas");
     canvas.width = 768;
     canvas.height = 128;
     const ctx = canvas.getContext("2d")!;
     ctx.fillStyle = dark ? "#222a27" : "#f8f9f5";
-    ctx.fillRect(0, 0, 768, 128);
-    ctx.font = "500 40px sans-serif";
+    ctx.beginPath();
+    ctx.roundRect(4, 4, 760, 120, sticker ? 14 : 22);
+    ctx.fill();
+    if (sticker) {
+      // A printed barcode strip, like the QR labels the app prints.
+      ctx.fillStyle = "#39433e";
+      let bx = 34;
+      while (bx < 150) {
+        const w = 2 + Math.round(rand() * 6);
+        ctx.fillRect(bx, 30, w, 68);
+        bx += w + 3 + Math.round(rand() * 4);
+      }
+    }
+    ctx.font = `600 ${sticker ? 44 : 40}px ${fontFamily}`;
     ctx.fillStyle = dark ? "#f8f9f5" : "#39433e";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    const left = sticker ? 170 : 24;
     ctx.fillText(
       text.length > 26 ? text.slice(0, 25) + "…" : text,
-      384,
-      64,
-      730,
+      (left + 744) / 2,
+      66,
+      744 - left,
     );
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = maxAniso;
     const mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(width, width / 6),
-      new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({
+        map: texture,
+        side: THREE.DoubleSide,
+        alphaTest: 0.5,
+      }),
     );
     mesh.position.set(x, y, z);
     parent.add(mesh);
     return mesh;
   }
-  // Cutaway architectural shell; front walls are intentionally omitted for visibility.
-  box(scene, 0, -0.3, 0, 21, 0.6, 15, "#c8cfca");
-  const floor = box(scene, 0, 0.02, 0, 20, 0.05, 14, "#f2f0e9");
-  box(scene, 0, -0.7, 0, 200, 0.1, 200, "#e7e9e6");
-  const grid = new THREE.GridHelper(20, 20, 0xc4ccc6, 0xdcded8);
-  grid.position.y = 0.06;
-  grid.scale.z = 0.7;
-  scene.add(grid);
-  box(scene, 0, 1.15, -7, 20, 2.3, 0.15, "#f9f9f2");
-  box(scene, -10, 1.15, 0, 0.15, 2.3, 14, "#ebeee6");
-  box(scene, 10, 0.22, 0, 0.15, 0.44, 14, "#f9f9f2");
-  for (const x of [-5.5, 5.5]) box(scene, x, 0.22, 7, 9, 0.44, 0.15, "#f9f9f2");
+
+  // ---- the room: a cutaway shell, front walls left low so the floor stays visible
+  const WALL = "#f7f6f0", SIDE_WALL = "#eceee7", CUT = "#3c4641", PANE = "#dde8ea";
+  const shell: THREE.BufferGeometry[] = [
+    slab(21, 0.6, 15, "#c8cfca", 0, -0.3, 0),
+    slab(21.08, 0.04, 15.08, "#aeb7b1", 0, -0.58, 0),
+  ];
+  /** A full-height wall with a band of windows; `axis` is the direction it runs. */
+  function windowWall(cx: number, cz: number, length: number, axis: "x" | "z", color: string) {
+    const along = (offset: number, w: number, h: number, d: number, c: string, y: number) =>
+      axis === "x"
+        ? slab(w, h, d, c, cx + offset, y, cz)
+        : slab(d, h, w, c, cx, y, cz + offset);
+    shell.push(
+      along(0, length, 0.95, 0.15, color, 0.475),
+      along(0, length, 0.25, 0.15, color, 2.175),
+      along(0, length, 0.04, 0.16, CUT, 2.32),
+      along(0, length, 0.08, 0.17, "#cfd3cc", 0.04),
+    );
+    const bays = Math.round(length / 2.5);
+    for (let i = 0; i < bays; i++) {
+      const offset = -length / 2 + (i + 0.5) * (length / bays);
+      shell.push(along(offset, length / bays - 0.08, 1.1, 0.05, PANE, 1.5));
+    }
+    for (let i = 0; i <= bays; i++)
+      shell.push(along(-length / 2 + i * (length / bays), 0.08, 1.12, 0.17, "#7e8c83", 1.5));
+    shell.push(along(0, length, 0.05, 0.22, "#e3e2db", 0.95));
+  }
+  windowWall(0, -7, 20, "x", WALL);
+  windowWall(-10, 0, 14.15, "z", SIDE_WALL);
+  // Low cut walls on the open sides, capped dark like an architectural section.
+  shell.push(slab(0.15, 0.44, 14, WALL, 10, 0.22, 0), slab(0.16, 0.03, 14, CUT, 10, 0.455, 0));
+  for (const x of [-5.5, 5.5])
+    shell.push(slab(9, 0.44, 0.15, WALL, x, 0.22, 7), slab(9, 0.03, 0.16, CUT, x, 0.455, 7));
+  // Glass partition frames, with a walk-through opening.
+  for (const x of [-6.5, -2.5])
+    for (const dx of [-1.75, 1.75]) shell.push(slab(0.05, 2.2, 0.08, "#7e8c83", x + dx, 1.1, 0.8));
+  for (const x of [-6.5, -2.5]) shell.push(slab(3.55, 0.05, 0.09, "#7e8c83", x, 2.18, 0.8));
+
+  // Plants: tapered pot, soil, and a fan of long leaves.
+  function plant(x: number, z: number) {
+    shell.push(
+      part(new THREE.CylinderGeometry(0.34, 0.25, 0.62, 20), "#d4d3c9", x, 0.31, z),
+      part(new THREE.CylinderGeometry(0.355, 0.34, 0.05, 20), "#c2c1b6", x, 0.62, z),
+      part(new THREE.CylinderGeometry(0.31, 0.31, 0.02, 16), "#4a3b2e", x, 0.6, z),
+    );
+    const n = 15;
+    for (let i = 0; i < n; i++) {
+      const a = i * 2.39996 + x;
+      const tilt = 0.18 + (i / n) * 0.62;
+      const length = 1.25 - (i / n) * 0.55 + rand() * 0.15;
+      const dir = new THREE.Vector3(
+        Math.sin(tilt) * Math.sin(a),
+        Math.cos(tilt),
+        Math.sin(tilt) * Math.cos(a),
+      );
+      const c = dir.multiplyScalar(length / 2);
+      shell.push(
+        part(
+          new THREE.SphereGeometry(1, 10, 8),
+          i % 3 === 0 ? "#6f9174" : i % 3 === 1 ? "#4a6e55" : "#3d5f48",
+          x + c.x,
+          0.62 + c.y,
+          z + c.z,
+          tilt,
+          a,
+          0,
+          0.075,
+          length / 2,
+          0.022,
+        ),
+      );
+    }
+  }
+  plant(-8.8, 5.7);
+  plant(8.8, -5.7);
+  plant(8.8, 5.7);
+  bake(scene, shell, paint);
+  for (const [x, z] of [
+    [-8.8, 5.7],
+    [8.8, -5.7],
+    [8.8, 5.7],
+  ])
+    contactShadow(scene, 1.3, 1.3, 0.052).position.set(x, 0.052, z);
+
+  const floor = new THREE.Mesh(
+    new THREE.BoxGeometry(20, 0.05, 14),
+    new THREE.MeshStandardMaterial({ map: floorMap, roughness: 0.42, metalness: 0 }),
+  );
+  floor.position.set(0, 0.02, 0);
+  floor.receiveShadow = true;
+  scene.add(floor);
+  const groundPlane = new THREE.Mesh(
+    new THREE.PlaneGeometry(200, 200),
+    new THREE.MeshStandardMaterial({ color: BACKDROP, roughness: 1 }),
+  );
+  groundPlane.rotation.x = -Math.PI / 2;
+  groundPlane.position.y = -0.65;
+  groundPlane.receiveShadow = true;
+  scene.add(groundPlane);
+
   const entrance = label(scene, "ENTRANCE", 0, 0.09, 6.5, 2.2, true);
   entrance.rotation.x = -Math.PI / 2;
   const startMarker = new THREE.Mesh(
@@ -149,51 +431,23 @@ export function createOffice(
   );
   startMarker.position.set(0, 0.1, 6);
   scene.add(startMarker);
-  // Glass partition, with a walk-through opening.
   const glass = new THREE.MeshStandardMaterial({
-    color: 0xc9ddd6,
+    color: 0xd4e6e0,
     transparent: true,
-    opacity: 0.28,
-    roughness: 0.12,
+    opacity: 0.22,
+    roughness: 0.05,
     metalness: 0.1,
+    envMapIntensity: 1.6,
   });
   for (const x of [-6.5, -2.5]) {
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(3.5, 2.1, 0.08), glass);
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(3.5, 2.1, 0.03), glass);
     panel.position.set(x, 1.1, 0.8);
     scene.add(panel);
-    for (const dx of [-1.75, 1.75])
-      box(scene, x + dx, 1.1, 0.8, 0.05, 2.2, 0.08, "#7e8c83");
   }
   const roomLabel = label(scene, "STORAGE / 01", -4.4, 0.08, -5.8, 3.2);
   roomLabel.rotation.x = -Math.PI / 2;
   const labLabel = label(scene, "WORKSPACE / 02", 4.7, 0.08, 5.6, 3.5);
   labLabel.rotation.x = -Math.PI / 2;
-  function plant(x: number, z: number) {
-    const pot = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.35, 0.25, 0.6, 16),
-      material("#c4c5ba"),
-    );
-    pot.position.set(x, 0.3, z);
-    pot.castShadow = true;
-    scene.add(pot);
-    for (let i = 0; i < 4; i++) {
-      const leaf = new THREE.Mesh(
-        new THREE.SphereGeometry(0.32, 12, 8),
-        material(i % 2 ? "#78947c" : "#4d7057"),
-      );
-      leaf.scale.set(0.7, 1.6, 0.7);
-      leaf.position.set(
-        x + Math.sin(i * 2) * 0.2,
-        0.9 + i * 0.14,
-        z + Math.cos(i * 2) * 0.2,
-      );
-      leaf.castShadow = true;
-      scene.add(leaf);
-    }
-  }
-  plant(-8.8, 5.7);
-  plant(8.8, -5.7);
-  plant(8.8, 5.7);
 
   const targets: THREE.Object3D[] = [];
   const boxTargets: THREE.Object3D[] = [];
@@ -201,6 +455,7 @@ export function createOffice(
   const boxOutlines = new Map<string, THREE.LineSegments>();
   const rings = new Map<string, THREE.Mesh>();
   const groups = new Map<string, THREE.Group>();
+  const POST = "#46544d", BEAM = "#56665d", FOOT = "#2f3833", DECK = "#e4cfac";
   for (const shelf of shelves) {
     const group = new THREE.Group();
     group.position.set(shelf.x, 0, shelf.z);
@@ -208,10 +463,20 @@ export function createOffice(
     scene.add(group);
     groups.set(shelf.id, group);
     if (shelf.kind === "table") {
-      box(group, 0, 1, 0, 2.6, 0.13, 1.3, "#c6b79d");
-      for (const x of [-1.1, 1.1])
-        for (const z of [-0.5, 0.5])
-          box(group, x, 0.5, z, 0.08, 1, 0.08, "#52625a");
+      const legs: THREE.BufferGeometry[] = [];
+      for (const x of [-1.1, 1.1]) {
+        for (const z of [-0.5, 0.5]) {
+          legs.push(slab(0.06, 0.96, 0.06, POST, x, 0.48, z));
+          legs.push(slab(0.1, 0.015, 0.1, FOOT, x, 0.0075, z));
+        }
+        legs.push(slab(0.04, 0.04, 1.0, BEAM, x, 0.18, 0));
+      }
+      legs.push(slab(2.2, 0.06, 0.03, BEAM, 0, 0.935, -0.5), slab(2.2, 0.06, 0.03, BEAM, 0, 0.935, 0.5));
+      bake(group, [
+        surfaced(part(new RoundedBoxGeometry(2.6, 0.07, 1.3, 2, 0.025), DECK, 0, 1.0, 0), false),
+        ...legs.map((g) => surfaced(g, true)),
+      ], rack);
+      contactShadow(group, 3.1, 1.8);
       const ring = new THREE.Mesh(
         new THREE.BoxGeometry(2.9, 0.035, 1.6),
         new THREE.MeshBasicMaterial({
@@ -239,11 +504,37 @@ export function createOffice(
       occupiedLevels(boxes),
     );
     const top = 0.26 + levels * 0.78;
-    for (const x of [-1.28, 1.28])
-      for (const z of [-0.48, 0.48])
-        box(group, x, top / 2, z, 0.07, top + 0.1, 0.07, "#52625a");
-    for (let level = 0; level <= levels; level++)
-      box(group, 0, 0.25 + level * 0.78, 0, 2.65, 0.08, 1.06, "#7b8c80");
+    // Boltless steel racking: posts, foot plates, beams and side bracing in one
+    // mesh; plywood decks in another.
+    const frame: THREE.BufferGeometry[] = [];
+    const decks: THREE.BufferGeometry[] = [];
+    for (const x of [-1.28, 1.28]) {
+      for (const z of [-0.48, 0.48]) {
+        frame.push(slab(0.07, top + 0.1, 0.07, POST, x, top / 2, z));
+        frame.push(slab(0.13, 0.015, 0.13, FOOT, x, 0.0075, z));
+      }
+      // Zig-zag side bracing between the two posts of each end frame.
+      const span = 0.96;
+      for (let level = 0; level < levels; level++) {
+        const y0 = 0.25 + level * 0.78, y1 = y0 + 0.78;
+        const rise = y1 - y0 - 0.12;
+        const len = Math.hypot(rise, span - 0.1);
+        const lean = Math.atan2(span - 0.1, rise) * (level % 2 ? 1 : -1);
+        frame.push(
+          part(new THREE.BoxGeometry(0.025, len, 0.02), BEAM, x, (y0 + y1) / 2, 0, lean),
+        );
+      }
+    }
+    for (let level = 0; level <= levels; level++) {
+      const y = 0.25 + level * 0.78;
+      for (const z of [-0.5, 0.5])
+        frame.push(slab(2.5, 0.07, 0.035, BEAM, 0, y - 0.035, z));
+      for (const x of [-1.28, 1.28])
+        frame.push(slab(0.04, 0.05, 0.96, BEAM, x, y - 0.03, 0));
+      decks.push(slab(2.5, 0.03, 0.97, DECK, 0, y + 0.025, 0));
+    }
+    bake(group, [...frame.map((g) => surfaced(g, true)), ...decks.map((g) => surfaced(g, false))], rack);
+    contactShadow(group, 3.3, 1.7);
     const quantity = shelf.items.reduce((n, item) => n + item.quantity, 0);
     boxes.forEach((storage) => {
       const level = Math.floor(storage.slot / 4),
@@ -255,22 +546,24 @@ export function createOffice(
       group.add(packageGroup);
       packages.set(storage.id, packageGroup);
       const full = storage.items.some((item) => item.quantity > 0);
-      const packageMesh = box(
+      // Kraft for boxes holding stock, a paler bleached board for empty ones.
+      const tint = full ? "#c9a476" : "#ddd5c6";
+      const packageMesh = bake(
         packageGroup,
-        0,
-        0,
-        0,
-        0.48,
-        0.48,
-        0.7,
-        full ? "#b4c3a8" : "#c4b49a",
+        [
+          part(new RoundedBoxGeometry(0.48, 0.48, 0.7, 2, 0.018), tint, 0, 0, 0),
+          slab(0.075, 0.008, 0.705, "#b08b5c", 0, 0.241, 0),
+          slab(0.075, 0.16, 0.008, "#b08b5c", 0, 0.165, 0.351),
+          slab(0.075, 0.16, 0.008, "#b08b5c", 0, 0.165, -0.351),
+        ],
+        kraft,
+        false,
       );
       packageMesh.userData = { shelfId: shelf.id, boxId: storage.id };
       boxTargets.push(packageMesh);
-      const sticker = label(packageGroup, storage.name, 0, 0, 0.357, 0.43);
+      const sticker = label(packageGroup, storage.name, 0, -0.03, 0.357, 0.43, false, true);
       sticker.userData = { shelfId: shelf.id, boxId: storage.id };
       boxTargets.push(sticker);
-      box(packageGroup, 0, 0.244, 0, 0.07, 0.01, 0.7, "#a39680");
       const outline = new THREE.LineSegments(
         new THREE.EdgesGeometry(new THREE.BoxGeometry(0.5, 0.5, 0.72)),
         new THREE.LineBasicMaterial({ color: 0xef83ad }),
@@ -363,7 +656,6 @@ export function createOffice(
       plan.rotation.x = -Math.PI / 2;
       plan.position.y = 0.07;
       scene.add(plan);
-      grid.visible = false;
       floor.visible = false;
     });
   let detail = false;
@@ -948,6 +1240,7 @@ export function createOffice(
       textures.forEach((t) => t.dispose());
       mats.forEach((m) => m.dispose());
       sun.shadow.dispose();
+      environment.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     },
