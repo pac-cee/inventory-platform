@@ -11,7 +11,7 @@ import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { kitGeometry } from "./verlet/kit.js";
-import { ENTRANCE } from "@/lib/spatial/verlet-site";
+import { AREA, ENTRANCE, KIT, OFFICES } from "@/lib/spatial/verlet-site";
 import {
   createVerletFloor,
   skyTexture,
@@ -26,7 +26,7 @@ import {
   type ObjectPose,
 } from "@/lib/spatial/camera";
 import type { FloorPoint } from "@/lib/spatial/directions";
-import { isDeskId, type SpatialShelf } from "@/lib/spatial/model";
+import { isFurniture, type SpatialShelf } from "@/lib/spatial/model";
 
 /** Inventory shelves are drawn as the stockroom's pine units: 2 m wide, four
  *  boxes per level (the slot order matches lib/spatial/box-placement). */
@@ -107,10 +107,11 @@ export function createOffice(
   sun.position.copy(HALL_CENTER).addScaledVector(SUN_DIRECTION, 90);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -24;
-  sun.shadow.camera.right = 24;
-  sun.shadow.camera.top = 24;
-  sun.shadow.camera.bottom = -24;
+  const reach = Math.hypot(AREA.x1 - AREA.x0, AREA.z1 - OFFICES.z0) / 2 + 3;
+  sun.shadow.camera.left = -reach;
+  sun.shadow.camera.right = reach;
+  sun.shadow.camera.top = reach;
+  sun.shadow.camera.bottom = -reach;
   sun.shadow.camera.near = 20;
   sun.shadow.camera.far = 170;
   sun.shadow.bias = -0.0004;
@@ -359,25 +360,30 @@ export function createOffice(
   // Tables are the 5190 workbench; shelves are its pine shelving units.
   const kitMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0.05 });
   const PINE = "#d6a56b", PINE_BACK = "#bf9058";
-  // Desks are one instanced mesh (one draw call for all of them); each has a
-  // group that holds its place, its ring and its hit box, and the instance
-  // follows the group while it is dragged.
-  const deskList = shelves.filter((s) => s.kind === "desk");
-  const deskMesh = deskList.length
-    ? new THREE.InstancedMesh(kitGeometry("workstation").clone(), kitMat, deskList.length)
-    : null;
-  const deskIndex = new Map<string, number>();
-  if (deskMesh) {
-    deskMesh.castShadow = deskMesh.receiveShadow = true;
-    scene.add(deskMesh);
-  }
+  // Furniture (desks and every other piece of the plan) is one instanced
+  // mesh per kind, so a whole floor of it costs a handful of draw calls. Each
+  // piece has a group that holds its place, its ring and its hit box, and the
+  // instance follows the group while it is dragged.
+  const furnitureMat = verlet.furnitureMaterial();
+  const furniture = new Map<string, { mesh: THREE.InstancedMesh; kind: string; index: number }>();
+  const byKind = new Map<string, SpatialShelf[]>();
+  for (const s of shelves)
+    if (isFurniture(s) && s.kit && s.kit in KIT) byKind.set(s.kit, [...(byKind.get(s.kit) ?? []), s]);
+  byKind.forEach((list, kind) => {
+    const mesh = new THREE.InstancedMesh(kitGeometry(kind).clone(), furnitureMat, list.length);
+    mesh.castShadow = mesh.receiveShadow = true;
+    scene.add(mesh);
+    list.forEach((s, index) => furniture.set(s.id, { mesh, kind, index }));
+  });
+  /** Hit boxes of furniture: only pickable while the plan is being edited. */
+  const furnitureTargets: THREE.Object3D[] = [];
   function syncDesk(id: string) {
-    const group = groups.get(id), index = deskIndex.get(id);
-    if (!deskMesh || !group || index === undefined) return;
+    const group = groups.get(id), piece = furniture.get(id);
+    if (!group || !piece) return;
     group.updateMatrix();
-    deskMesh.setMatrixAt(index, group.matrix);
-    deskMesh.instanceMatrix.needsUpdate = true;
-    deskMesh.computeBoundingSphere();
+    piece.mesh.setMatrixAt(piece.index, group.matrix);
+    piece.mesh.instanceMatrix.needsUpdate = true;
+    piece.mesh.computeBoundingSphere();
   }
   for (const shelf of shelves) {
     const group = new THREE.Group();
@@ -385,13 +391,14 @@ export function createOffice(
     group.rotation.y = THREE.MathUtils.degToRad(shelf.rotation);
     scene.add(group);
     groups.set(shelf.id, group);
-    if (shelf.kind === "desk") {
-      deskIndex.set(shelf.id, deskIndex.size);
+    if (isFurniture(shelf)) {
+      const [w, d] = KIT[shelf.kit ?? ""] ?? [1, 1];
       syncDesk(shelf.id);
       group.userData.tagY = 1.5;
-      // Lit only when it is yours, hovered or selected, so 26 desks stay quiet.
+      group.userData.kit = shelf.kit;
+      // Lit only when it is yours, hovered or selected, so a floor of furniture stays quiet.
       const ring = new THREE.Mesh(
-        new THREE.BoxGeometry(1.9, 0.035, 1.8),
+        new THREE.BoxGeometry(w + 0.3, 0.035, d + 0.3),
         new THREE.MeshBasicMaterial({ color: 0x9db7a4, transparent: true, opacity: 0.2 }),
       );
       ring.position.y = 0.02;
@@ -400,16 +407,16 @@ export function createOffice(
       ring.visible = !!shelf.mine;
       group.add(ring);
       rings.set(shelf.id, ring);
-      // Only desks this person may move can be picked up.
+      // Only what this person may move can be picked up.
       if (!shelf.locked) {
         const hit = new THREE.Mesh(
-          new THREE.BoxGeometry(1.7, 1.2, 1.6),
+          new THREE.BoxGeometry(w + 0.1, 1.2, d + 0.1),
           new THREE.MeshBasicMaterial({ visible: false }),
         );
         hit.position.y = 0.6;
         hit.userData.shelfId = shelf.id;
         group.add(hit);
-        targets.push(hit);
+        furnitureTargets.push(hit);
       }
       continue;
     }
@@ -526,7 +533,7 @@ export function createOffice(
     const group = groups.get(shelf.id);
     // Tables have no tag; of the desks, only your own does.
     if (shelf.kind === "table" || !group) continue;
-    if (shelf.kind === "desk" && !shelf.mine) continue;
+    if (shelf.kind === "piece" || (shelf.kind === "desk" && !shelf.mine)) continue;
     const boxes = shelf.boxes?.length ?? 0;
     const el = document.createElement("button");
     el.type = "button";
@@ -921,7 +928,7 @@ export function createOffice(
     );
     ray.setFromCamera(pointer, camera);
     if (editing && !arrangeShelf) {
-      return ray.intersectObjects(targets)[0]?.object.userData as
+      return ray.intersectObjects([...targets, ...furnitureTargets])[0]?.object.userData as
         | { shelfId: string; boxId?: string }
         | undefined;
     }
@@ -1022,7 +1029,11 @@ export function createOffice(
       const point = floorPoint(e);
       if (point) {
         point.sub(drag.offset);
-        const p = snapShelf({ x: point.x, z: point.z, rotation: 0 }, isDeskId(drag.id));
+        const g = groups.get(drag.id);
+        const p = snapShelf(
+          { x: point.x, z: point.z, rotation: THREE.MathUtils.radToDeg(g?.rotation.y ?? 0) },
+          g?.userData.kit,
+        );
         groups.get(drag.id)?.position.set(p.x, 0, p.z);
         syncDesk(drag.id);
       }
@@ -1110,7 +1121,7 @@ export function createOffice(
   let atOverview = true;
   const fitter = new THREE.PerspectiveCamera();
   // the hall plus the corridor and small offices behind its north wall
-  const hallCorners = [-18, 18].flatMap((x) => [0, 3.2].flatMap((y) => [-20, 12].map((z) => new THREE.Vector3(x, y, z))));
+  const hallCorners = [AREA.x0, AREA.x1].flatMap((x) => [0, 3.2].flatMap((y) => [OFFICES.z0, AREA.z1].map((z) => new THREE.Vector3(x, y, z))));
   const OVERVIEW_DIR = OVERVIEW.clone().sub(HALL_CENTER).normalize();
   // On tall screens (phones) look along the hall from its east end, so its
   // long side runs up the screen instead of shrinking to fit the width.

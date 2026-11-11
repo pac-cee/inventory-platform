@@ -72,12 +72,21 @@ describe("departments and desks", () => {
     expect((await mockRequest<Data[]>("GET", "/departments")).some((d) => d.id === ops.id)).toBe(false);
   });
 
-  it("remembers where a desk stands and who sits there", async () => {
+  it("remembers who sits at a desk", async () => {
     expect(await mockRequest<Data[]>("GET", "/desks")).toEqual([]);
-    await mockRequest("PUT", "/desks/soft-workstation-3", { x: 2, z: 3, rotation: 90 });
     await mockRequest("PUT", "/desks/soft-workstation-3", { user_id: "someone" });
-    expect(await mockRequest<Data[]>("GET", "/desks")).toEqual([
-      { id: "soft-workstation-3", user_id: "someone", x: 2, z: 3, rotation: 90 },
-    ]);
+    expect(await mockRequest<Data[]>("GET", "/desks")).toEqual([{ id: "soft-workstation-3", user_id: "someone" }]);
+    await mockRequest("PUT", "/desks/soft-workstation-3", { user_id: null });
+    expect(await mockRequest<Data[]>("GET", "/desks")).toEqual([{ id: "soft-workstation-3", user_id: null }]);
+  });
+
+  it("keeps the floor plan someone saved, and forgets it when asked", async () => {
+    expect(await mockRequest<Data>("GET", "/floor-plan")).toBeNull();
+    const plan = { version: 1, length: 18, width: 12, doorX: 0, pieces: [], homes: {}, tables: {} };
+    await mockRequest("PUT", "/floor-plan", plan);
+    expect(await mockRequest<Data>("GET", "/floor-plan")).toEqual(plan);
+    await expect(mockRequest("PUT", "/floor-plan", { nonsense: true })).rejects.toBeInstanceOf(MockError);
+    await mockRequest("DELETE", "/floor-plan");
+    expect(await mockRequest<Data>("GET", "/floor-plan")).toBeNull();
   });
 });

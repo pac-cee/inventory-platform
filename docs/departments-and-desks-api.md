@@ -19,17 +19,25 @@ Items belong to at most one department. Admins and stock managers manage the lis
 `items` gains `department_id uuid null references departments(id) on delete set null`,
 accepted by `POST /items` and `PATCH /items/:id` and returned on every item.
 
-## Desks
+## Floor plan and desks
 
-One row per desk someone has moved or been given. Ids are the floor plan's
-(`src/lib/spatial/verlet-site.ts`, `DESKS`), e.g. `soft-workstation-3`.
+The room is one JSON document, edited in the office map (Edit plan > Room):
+its size, door, every piece of furniture, and where each shelf stands. Its
+shape is `FloorPlan` in `src/lib/spatial/verlet-site.ts`. The mock keeps it in
+`data/floor-plan.json`, so a room laid out by hand survives a restart; commit
+that file to make it the room everyone starts from.
 
 | Call | Body | Returns |
 |---|---|---|
-| `GET /desks` | | `[{ id, user_id, x, z, rotation }]` |
-| `PUT /desks/:id` | `{ x?, z?, rotation?, user_id? }` | the desk (created if missing) |
+| `GET /floor-plan` | | the saved plan, or `null` when nobody has saved one |
+| `PUT /floor-plan` | a `FloorPlan` | the plan |
+| `DELETE /floor-plan` | | `null`; the app's default room is used again |
+| `GET /desks` | | `[{ id, user_id }]`: who sits at which desk |
+| `PUT /desks/:id` | `{ user_id }` | the desk (created if missing) |
 
-Rules the API should enforce (the app's server action already does):
-a person may change `x`, `z`, `rotation` of a desk whose `user_id` is theirs;
-only an admin or stock manager may change any desk or set `user_id`.
-`x`/`z` are metres from the hall's centre, `rotation` is 0, 90, 180 or 270.
+Desk ids are the ids of the plan's pieces of kind `workstation`.
+
+Rules the API should enforce (the app's server actions already do): only an
+admin or stock manager may `PUT`/`DELETE` the plan or set a desk's `user_id`.
+The one exception is a person moving their own desk, which the app does by
+rewriting that one piece's `x`, `z`, `rot` in the plan on their behalf.

@@ -9,14 +9,14 @@ export function shelfLevels(requested: number | undefined, boxCount: number) {
     ),
   );
 }
-export function snapShelf(p: Placement, desk = false): Placement {
+export function snapShelf(p: Placement, kit?: string | false): Placement {
   return clampPlacement(
     {
       ...p,
       x: Math.round(p.x * 2) / 2,
       z: Math.round(p.z * 2) / 2,
     },
-    desk,
+    kit,
   );
 }
 export function emptyShelfCopy(s: SpatialShelf, id: string): SpatialShelf {
@@ -31,17 +31,18 @@ export function emptyShelfCopy(s: SpatialShelf, id: string): SpatialShelf {
   };
 }
 
-/** The office's tables, standing on the 5190 floor's benches. */
-export const OFFICE_TABLES: SpatialShelf[] = [
-  ["office-table-1", "Desk 1"],
-  ["office-table-2", "Desk 2"],
-  ["office-table-3", "Work table"],
-].map(([id, name]) => ({
-  id,
-  name,
-  x: TABLE_HOMES[id].x,
-  z: TABLE_HOMES[id].z,
-  rotation: TABLE_HOMES[id].rotation,
-  kind: "table" as const,
-  items: [],
-}));
+/** The office's work tables, where the floor plan puts them. */
+export function officeTables(): SpatialShelf[] {
+  const names: Record<string, string> = {
+    "office-table-1": "Table 1",
+    "office-table-2": "Table 2",
+    "office-table-3": "Work table",
+  };
+  return Object.entries(TABLE_HOMES).map(([id, home]) => ({
+    id,
+    name: names[id] ?? "Table",
+    ...home,
+    kind: "table" as const,
+    items: [],
+  }));
+}

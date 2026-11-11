@@ -5,7 +5,7 @@ import {
   officeObstacles,
   shelfApproach,
 } from "./directions";
-import { isKnownLocation, locationHome } from "./verlet-site";
+import { DOOR, AREA, isKnownLocation, locationHome } from "./verlet-site";
 
 const LOCATIONS = [
   "Cables box", "Camera box", "Field Kit", "Front desk", "Lab A", "Main Store",
@@ -58,11 +58,16 @@ it("rejects invalid and out-of-floor endpoints", () => {
 });
 it("uses current table placements and releases space after removal", () => {
   // just inside the door, which the layout keeps clear
-  expect(inside({ x: -5.5, z: -10.5 }, officeObstacles([], []))).toBe(false);
-  expect(
-    inside({ x: -5.5, z: -10.5 }, officeObstacles([], [{ x: -5.5, z: -10.5, rotation: 0 }])),
-  ).toBe(true);
+  const lobby = { x: DOOR.x, z: AREA.z0 + 1.5 };
+  expect(inside(lobby, officeObstacles([], []))).toBe(false);
+  expect(inside(lobby, officeObstacles([], [{ ...lobby, rotation: 0 }]))).toBe(true);
 });
 it("walks round the floor's columns and furniture", () => {
   expect(inside({ x: 0, z: 0 }, officeObstacles([], []))).toBe(true);
+  expect(inside({ x: -3, z: -2.5 }, officeObstacles([], []))).toBe(true);
+  // furniture that has been moved away no longer blocks
+  expect(inside({ x: -3, z: -2.5 }, officeObstacles([], [], []))).toBe(false);
+  expect(
+    inside({ x: 5, z: 5 }, officeObstacles([], [], [{ x: 5, z: 5.5, rotation: 90, kit: "workstation" }])),
+  ).toBe(true);
 });

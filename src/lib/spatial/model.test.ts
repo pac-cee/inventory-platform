@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { shelfFill, clampPlacement, readLayout, isShelf, isDeskId } from "./model";
-import { DESKS, REPLACED } from "./verlet-site";
+import { shelfFill, clampPlacement, readLayout, isShelf, isFurniture, planId } from "./model";
+import { DESKS } from "./verlet-site";
 
 describe("spatial inventory", () => {
   it("renders an empty shelf when stock is zero", () => {
@@ -14,7 +14,7 @@ describe("spatial inventory", () => {
   });
   it("keeps a shelf within Verlet's floor", () => {
     expect(clampPlacement({ x: 500, z: -500, rotation: 91 })).toEqual({
-      x: 17.5,
+      x: 11.5,
       z: -11.5,
       rotation: 90,
     });
@@ -28,25 +28,33 @@ describe("spatial inventory", () => {
   });
 });
 
-describe("desks", () => {
-  it("keeps a desk in the hall or the small offices, never in the wall or corridor", () => {
-    expect(clampPlacement({ x: 0, z: -11.8, rotation: 0 }, true).z).toBe(-10.9);
-    expect(clampPlacement({ x: 0, z: -14, rotation: 0 }, true).z).toBe(-15.1);
-    expect(clampPlacement({ x: 0, z: -17, rotation: 0 }, true).z).toBe(-17);
-    expect(clampPlacement({ x: 40, z: 40, rotation: 0 }, true)).toMatchObject({ x: 16.9, z: 10.9 });
+describe("desks and furniture", () => {
+  it("keeps a desk's whole footprint in the hall or behind the north wall, never in the wall", () => {
+    expect(clampPlacement({ x: 0, z: -11.8, rotation: 0 }, "workstation").z).toBe(-11);
+    expect(clampPlacement({ x: 0, z: -12.2, rotation: 0 }, "workstation").z).toBe(-13);
+    expect(clampPlacement({ x: 0, z: -17, rotation: 0 }, "workstation").z).toBe(-17);
+    expect(clampPlacement({ x: 40, z: 40, rotation: 0 }, "workstation")).toMatchObject({ x: 10.95, z: 11 });
+    // turned, it is deeper than it is wide
+    expect(clampPlacement({ x: 40, z: 40, rotation: 90 }, "workstation")).toMatchObject({ x: 11, z: 10.95 });
   });
   it("turns in steps of 90 degrees", () => {
-    expect(clampPlacement({ x: 0, z: 0, rotation: 450 }, true).rotation).toBe(90);
-    expect(clampPlacement({ x: 0, z: 0, rotation: -90 }, true).rotation).toBe(270);
+    expect(clampPlacement({ x: 0, z: 0, rotation: 450 }, "workstation").rotation).toBe(90);
+    expect(clampPlacement({ x: 0, z: 0, rotation: -90 }, "workstation").rotation).toBe(270);
   });
   it("leaves every desk where the floor plan put it", () => {
-    for (const desk of DESKS) expect(clampPlacement(desk, true)).toMatchObject({ x: desk.x, z: desk.z, rotation: desk.rotation });
-    expect(new Set(DESKS.map((desk) => desk.name)).size).toBe(DESKS.length);
-    expect(DESKS.every((desk) => REPLACED.has(desk.id))).toBe(true);
+    for (const desk of DESKS)
+      expect(clampPlacement(desk, "workstation")).toMatchObject({ x: desk.x, z: desk.z, rotation: desk.rotation });
   });
-  it("tells shelves from furniture", () => {
+  it("tells shelves from furniture, and keeps furniture out of a device's saved layout", () => {
     expect(isShelf({})).toBe(true);
     expect(isShelf({ kind: "desk" })).toBe(false);
-    expect(isDeskId("desk:soft-workstation-3")).toBe(true);
+    expect(isFurniture({ kind: "piece" })).toBe(true);
+    expect(planId("desk:soft-workstation-3")).toBe("soft-workstation-3");
+    const saved = JSON.stringify({
+      "desk:soft-workstation-3": { x: 1, z: 1, rotation: 0 },
+      "piece:plant-sw": { x: 1, z: 1, rotation: 0 },
+      shelf: { x: 1, z: 1, rotation: 0 },
+    });
+    expect(Object.keys(readLayout(saved))).toEqual(["shelf"]);
   });
 });

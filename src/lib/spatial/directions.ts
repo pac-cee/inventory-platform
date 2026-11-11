@@ -1,9 +1,10 @@
 import type { Placement } from "./model";
 import {
-  DESKS,
   ENTRANCE,
   FLOOR_BOUNDS,
+  PIECES,
   TABLE_HOMES,
+  pieceRect,
   siteObstacles,
 } from "./verlet-site";
 export interface FloorPoint {
@@ -21,7 +22,7 @@ export interface FloorRoute {
   distance: number;
 }
 /** Just inside the hall's glass double door. */
-export const OFFICE_ENTRANCE: FloorPoint = { ...ENTRANCE };
+export const OFFICE_ENTRANCE: FloorPoint = ENTRANCE;
 export function shelfApproach(shelf: Placement): FloorPoint {
   const angle = (shelf.rotation * Math.PI) / 180;
   return {
@@ -32,24 +33,21 @@ export function shelfApproach(shelf: Placement): FloorPoint {
 export function officeObstacles(
   shelves: Placement[],
   tables?: Placement[],
-  desks?: Placement[],
+  furniture?: (Placement & { kit: string })[],
 ): Obstacle[] {
-  // Desks stand where the floor plan puts them until someone moves theirs.
-  const seats = (desks ?? DESKS).map((d) => {
-    const rotated = Math.abs(Math.sin((d.rotation * Math.PI) / 180)) > 0.5;
-    const x = rotated ? 0.95 : 1.0,
-      z = rotated ? 1.0 : 0.95;
-    return { minX: d.x - x, maxX: d.x + x, minZ: d.z - z, maxZ: d.z + z };
-  });
-  // Tables stand on the 5190 benches by default; moved tables go with them.
-  const furniture = (tables ?? Object.values(TABLE_HOMES)).map((t) => {
+  // Furniture stands where the floor plan puts it until someone moves it.
+  const seats = furniture
+    ? furniture.map((f) => pieceRect({ kind: f.kit, x: f.x, z: f.z, rot: (f.rotation * Math.PI) / 180 }))
+    : PIECES.map((p) => pieceRect(p));
+  // Tables stand where the plan puts them; moved tables go with them.
+  const benches = (tables ?? Object.values(TABLE_HOMES)).map((t) => {
     const rotated = Math.abs(Math.sin((t.rotation * Math.PI) / 180)) > 0.5;
     const x = rotated ? 0.7 : 1.2,
       z = rotated ? 1.2 : 0.7;
     return { minX: t.x - x, maxX: t.x + x, minZ: t.z - z, maxZ: t.z + z };
   });
   return [
-    ...furniture,
+    ...benches,
     ...seats,
     ...siteObstacles(),
     ...shelves.map((s) => {

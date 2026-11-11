@@ -2,6 +2,7 @@ import {
   AREA,
   COLUMNS,
   DOOR,
+  KIT,
   OFFICES,
 } from "@/lib/spatial/verlet-site";
 import type { SpatialShelf } from "@/lib/spatial/model";
@@ -40,8 +41,9 @@ export function FloorSketch({ shelves }: { shelves: SpatialShelf[] }) {
         <rect key={`${x},${z}`} className="floor-sketch-column" x={x - 0.25} y={z - 0.25} width={0.5} height={0.5} style={step()} />
       ))}
       {shelves.map((s) => {
-        const table = s.kind === "table" || s.kind === "desk";
-        const sw = s.kind === "desk" ? 1.6 : 2, sd = s.kind === "desk" ? 1.5 : table ? 1 : 0.5;
+        const kit = s.kit ? KIT[s.kit] : undefined;
+        const table = s.kind === "table" || !!kit;
+        const sw = kit ? kit[0] : 2, sd = kit ? kit[1] : table ? 1 : 0.5;
         return (
           <rect
             key={s.id}

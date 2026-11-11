@@ -1,5 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import fixtures from "./fixtures.json";
 
 /**
@@ -41,6 +43,34 @@ const store = {
   ].map(([name, color], i) => ({ id: `00000000-0000-4000-8000-00000000000${i + 1}`, name, color, created_at: fixtures.capturedAt })) as Data[],
   desks: [] as Data[],
 };
+
+// The floor plan is the one thing kept on disk, so a room someone has laid out
+// by hand survives a restart. Tests and read-only hosts keep it in memory.
+const PLAN_FILE = process.env.VITEST ? null : (process.env.FLOOR_PLAN_FILE ?? join(process.cwd(), "data", "floor-plan.json"));
+let floorPlan: Data = null;
+let planRead = false;
+function readPlan(): Data {
+  if (!planRead) {
+    planRead = true;
+    try {
+      if (PLAN_FILE && existsSync(PLAN_FILE)) floorPlan = JSON.parse(readFileSync(PLAN_FILE, "utf8"));
+    } catch {
+      floorPlan = null;
+    }
+  }
+  return floorPlan;
+}
+function writePlan(plan: Data) {
+  floorPlan = plan;
+  planRead = true;
+  try {
+    if (!PLAN_FILE) return;
+    mkdirSync(dirname(PLAN_FILE), { recursive: true });
+    writeFileSync(PLAN_FILE, `${JSON.stringify(plan, null, 2)}\n`);
+  } catch {
+    /* read-only host: the plan lasts until the server restarts */
+  }
+}
 
 export class MockError extends Error {
   constructor(public status: number, message: string) {
@@ -90,6 +120,7 @@ function read(path: string): Data {
   if (base === "/profiles") return store.profiles;
   if (base === "/departments") return store.departments;
   if (base === "/desks") return store.desks;
+  if (base === "/floor-plan") return readPlan();
 
   const item = base.match(/^\/items\/([^/]+)$/);
   if (item && item[1] !== "categories" && item[1] !== "where") {
@@ -159,9 +190,18 @@ function write(method: string, path: string, body: Data): Data {
   }
   const desk = base.match(/^\/desks\/([\w-]{1,64})$/);
   if (desk && method === "PUT") {
-    const saved = { user_id: null, x: null, z: null, rotation: null, ...store.desks.find((d) => d.id === desk[1]), ...body, id: desk[1] };
+    const saved = { id: desk[1], user_id: body.user_id ?? null };
     store.desks = [...store.desks.filter((d) => d.id !== desk[1]), saved];
     return saved;
+  }
+  if (base === "/floor-plan" && method === "PUT") {
+    if (!body || !Array.isArray(body.pieces)) throw new MockError(400, "That is not a floor plan.");
+    writePlan(body);
+    return body;
+  }
+  if (base === "/floor-plan" && method === "DELETE") {
+    writePlan(null);
+    return null;
   }
 
   const one = base.match(/^\/(items|locations|users|profiles)\/([0-9a-f-]{36})(?:\/(role|block|payment-settings))?$/)

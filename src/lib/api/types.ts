@@ -360,15 +360,10 @@ export interface Department {
   created_at: string;
 }
 
-/** One desk on the office map: who sits there and where it stands. Desks the
- *  API has no row for stand at their place on the floor plan, unassigned. */
+/** Who sits at a desk on the office map. Where the desk stands is part of
+ *  the floor plan (GET /floor-plan), like all other furniture. */
 export interface Desk {
   /** The floor plan's id for the desk, e.g. "soft-workstation-3". */
   id: string;
   user_id: string | null;
-  /** Metres from the hall's centre; null = the floor plan's place. */
-  x: number | null;
-  z: number | null;
-  /** Degrees, in steps of 90. */
-  rotation: number | null;
 }

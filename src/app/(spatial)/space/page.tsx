@@ -10,10 +10,10 @@ import type {
   StockLevel,
   Desk,
 } from "@/lib/api/types";
-import { DESK_PREFIX, clampPlacement, type SpatialShelf } from "@/lib/spatial/model";
+import type { SpatialShelf } from "@/lib/spatial/model";
 import { canManageInventory } from "@/lib/roles";
 import { SpatialWorkspace } from "@/components/spatial/workspace";
-import { DESKS, isKnownLocation, locationHome } from "@/lib/spatial/verlet-site";
+import { applyPlan, isKnownLocation, locationHome } from "@/lib/spatial/verlet-site";
 
 export default async function SpacePage() {
   const api = serverApi();
@@ -55,9 +55,19 @@ export default async function SpacePage() {
       </div>
     );
   const [locations, items, stock] = data;
+  // The room: the plan someone saved, or the default. `stored` is undefined
+  // when the API has no floor plan at all; the room can then not be edited.
+  const [stored, owners, people] = await Promise.all([
+    api.get<unknown>("/floor-plan").catch(() => undefined),
+    api.get<Desk[]>("/desks").catch(() => null),
+    api.get<Profile[]>("/profiles").catch(() => [] as Profile[]),
+  ]);
+  const plan = applyPlan(stored);
+  const editable = stored !== undefined && owners !== null;
+  const manager = canManageInventory(profile);
   const byId = new Map(items.map((item) => [item.id, item]));
-  // Each location stands where its furniture is on Verlet's floor; locations
-  // the floor plan doesn't know take the next spare spot.
+  // Each location stands where the plan puts it; locations the plan does not
+  // name take the next spare spot.
   let spare = 0;
   const shelves: SpatialShelf[] = locations.map((location) => ({
     id: location.id,
@@ -76,37 +86,14 @@ export default async function SpacePage() {
         capacity: row.capacity,
       })),
   }));
-  // Desks: where each stands and who sits there. null when the API has no
-  // desks yet; they are then part of the room and cannot be moved.
-  const [saved, people] = await Promise.all([
-    api.get<Desk[]>("/desks").catch(() => null),
-    api.get<Profile[]>("/profiles").catch(() => [] as Profile[]),
-  ]);
-  const manager = canManageInventory(profile);
-  const nameOf = new Map(people.map((p) => [p.id, p.full_name ?? p.email ?? "Unnamed"]));
-  const desks: SpatialShelf[] = DESKS.map((home) => {
-    const row = saved?.find((d) => d.id === home.id);
-    const owner = row?.user_id ?? null;
-    const placed = row && row.x !== null && row.z !== null && row.rotation !== null;
-    return {
-      id: `${DESK_PREFIX}${home.id}`,
-      kind: "desk" as const,
-      name: home.name,
-      ...(placed
-        ? clampPlacement({ x: row.x!, z: row.z!, rotation: row.rotation! }, true)
-        : { x: home.x, z: home.z, rotation: home.rotation }),
-      owner,
-      ownerName: owner ? (nameOf.get(owner) ?? (owner === user.id ? "You" : "Someone")) : null,
-      mine: owner === user.id,
-      locked: !saved || !(manager || owner === user.id),
-      items: [],
-    };
-  });
   return (
     <SpatialWorkspace
       shelves={shelves}
-      desks={desks}
-      people={manager && saved ? people.filter((p) => !p.blocked).map((p) => ({ id: p.id, name: p.full_name ?? p.email ?? "Unnamed" })) : []}
+      plan={plan}
+      canEditRoom={editable && manager}
+      canMoveDesks={editable}
+      deskOwners={Object.fromEntries((owners ?? []).map((d) => [d.id, d.user_id]))}
+      people={people.filter((p) => !p.blocked).map((p) => ({ id: p.id, name: p.full_name ?? p.email ?? "Unnamed" }))}
       userId={user.id}
       profile={profile}
       catalog={items.map((i) => ({

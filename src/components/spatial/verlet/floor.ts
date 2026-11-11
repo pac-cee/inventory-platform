@@ -4,25 +4,20 @@
 // a louvred band, frosted east partition with a glass door, pine wall shelving)
 // with its desks and benches, shown on its own as a cut-out floor model.
 //
-// The whole 5190 floor plan is placed as it is there: every zone, desk,
-// bench, column and the pine stockroom shelving.
+// The room follows the live floor plan (lib/spatial/verlet-site): its size,
+// columns, door and small offices. Furniture is drawn by the office map.
 //
 // Everything here is static, so it is merged into one mesh per material:
 // about a dozen draw calls for the whole floor.
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import * as T from "./textures.js";
-import { kitGeometry } from "./kit.js";
 import {
   AREA,
   CEILING,
   DOOR,
   OFFICES,
   COLUMNS,
-  PIECES,
-  RACK_DIRS,
-  REPLACED,
-  SHELVING,
 } from "@/lib/spatial/verlet-site";
 
 /** The hall's centre is the world origin; shelves, routes and Edit plan share it. */
@@ -41,11 +36,6 @@ export const SUN_DIRECTION = (() => {
 })();
 /** A plain studio backdrop, so the floor model is the only thing to look at. */
 export const SKY = { top: "#5b6066", horizon: "#b9b3aa", ground: "#4a4845" };
-
-function hash(i: number) {
-  const x = Math.sin(i * 127.1 + 311.7) * 43758.5453;
-  return x - Math.floor(x);
-}
 
 /** Uniforms for the see-through cut: anything within uCutR of the line from
  *  the camera (A) to what it is looking at (B) is not drawn. */
@@ -214,8 +204,6 @@ export function createVerletFloor() {
   const paintMat = surfaceShader(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 1 }), "verlet-paint", cut);
   const clearGlass = new THREE.MeshStandardMaterial({ color: "#a9c4d4", transparent: true, opacity: 0.28, metalness: 0.2, roughness: 0.05, envMapIntensity: 1.6, depthWrite: false });
   const frostMat = new THREE.MeshStandardMaterial({ map: T.frosted(), transparent: true, roughness: 0.5, depthWrite: false });
-  const cardMat = new THREE.MeshStandardMaterial({ map: T.cardboard(), roughness: 0.92 });
-  const trayMat = new THREE.MeshStandardMaterial({ color: "#f1f1ee", roughness: 0.5, side: THREE.DoubleSide });
 
   const painted: THREE.BufferGeometry[] = [];
   const P = (g: THREE.BufferGeometry, color: string, metal = 0, rough = 0.85) =>
@@ -295,71 +283,46 @@ export function createVerletFloor() {
     box(DOOR.w / 2 - 0.04, 2.2, 0.04, DOOR.x + DOOR.w / 4, 1.1, AREA.z0 + WT / 2),
   ], clearGlass, false);
 
-  // ---- stockroom shelving: pine units in an L along the yellow walls, with boxes ---
-  const SH = SHELVING;
-  const cards: THREE.BufferGeometry[] = [], trays: THREE.BufferGeometry[] = [], tags: THREE.BufferGeometry[] = [];
-  const bins: { code: string; x: number; y: number; z: number; h: number; d: number; rot: number; front: [number, number]; tray: boolean }[] = [];
-  // Racks that an inventory location stands on are drawn by the office map.
-  for (const r of SH.racks.filter((rack) => !REPLACED.has(rack.id))) {
-    const { along, front, rot } = RACK_DIRS[r.dir];
-    const at = (u: number, v: number) => [r.x + along[0] * u + front[0] * v, r.z + along[1] * u + front[1] * v];
-    for (let k = 0; k <= SH.bays; k++)
-      for (const v of [-SH.depth / 2, SH.depth / 2]) {
-        const [x, z] = at(k * SH.bayW, v);
-        P(box(0.05, SH.height, 0.05, x, SH.height / 2, z, rot), "#d9b07a", 0, 0.7);
-      }
-    for (let k = 0; k < SH.bays; k++) {
-      const [bx, bz] = at((k + 0.5) * SH.bayW, -SH.depth / 2 + 0.01);
-      P(box(SH.bayW, SH.height, 0.015, bx, SH.height / 2, bz, rot), "#c69a62", 0, 0.75);
-      for (const y of [...SH.levels, SH.height - 0.04]) {
-        const [x, z] = at((k + 0.5) * SH.bayW, 0);
-        P(box(SH.bayW - 0.04, 0.03, SH.depth, x, y, z, rot), "#d9b07a", 0, 0.7);
-      }
-      for (let l = 1; l <= SH.levels.length; l++)
-        for (const sd of ["L", "R"]) {
-          const i = bins.length, tray = hash(i) < 0.28;
-          const h = tray ? 0.16 : 0.26 + hash(i + 7) * 0.2, w = tray ? 0.44 : 0.4 + hash(i + 3) * 0.06, d = tray ? 0.38 : 0.36;
-          const u = (k + 0.5) * SH.bayW + (sd === "L" ? -0.25 : 0.25) + (hash(i + 5) - 0.5) * 0.03;
-          const [x, z] = at(u, (hash(i + 9) - 0.5) * 0.03 + 0.02);
-          const brot = rot + (hash(i + 11) - 0.5) * 0.06;
-          const y = SH.levels[l - 1] + 0.015 + h / 2;
-          bins.push({ code: `${r.name}-${k + 1}-${l}-${sd}`, x, y, z, h, d, rot: brot, front, tray });
-          if (tray) {
-            const g = new THREE.BoxGeometry(w, h, d);
-            const index = Array.from(g.index!.array);
-            const top = g.groups[2];
-            index.splice(top.start, top.count);
-            g.setIndex(index);
-            g.clearGroups();
-            trays.push(placed(g, x, y, z, brot));
-          } else cards.push(placed(new THREE.BoxGeometry(w, h, d), x, y, z, brot));
-        }
-    }
-  }
-  bake(cards, cardMat, true);
-  bake(trays, trayMat, false);
-  const atlas = new T.LabelAtlas(bins.length);
-  bins.forEach((b, i) => {
-    atlas.draw(i, { code: b.code, line: "", qty: "" });
-    const g = new THREE.PlaneGeometry(0.24, 0.12);
-    const [cx, cy] = atlas.cellUV(i) as [number, number];
-    const uv = g.attributes.uv as THREE.BufferAttribute;
-    for (let k = 0; k < uv.count; k++) uv.setXY(k, (uv.getX(k) + cx) / atlas.N, (uv.getY(k) + cy) / atlas.N);
-    const off = b.d / 2 + 0.004;
-    tags.push(placed(g, b.x + b.front[0] * off, b.tray ? b.y - b.h * 0.05 : b.y - b.h * 0.12, b.z + b.front[1] * off, b.rot));
-  });
-  bake(tags, new THREE.MeshStandardMaterial({ map: atlas.texture, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -1 }), false);
-
-  // ---- furniture: the 5190 floor plan ---------------------------------------------
-  // Pieces that stand for an inventory location are drawn by the office map.
-  for (const p of PIECES)
-    if (!REPLACED.has(p.id))
-      P(placed(kitGeometry(p.kind).clone(), p.x, 0, p.z, p.rot), "#ffffff", 0.05, 0.62);
-
+  // Furniture is not part of the room: the office map draws every piece of
+  // the plan live, so it can be picked up, turned and removed.
   bake(painted, paintMat, true);
 
   return {
     group,
+    /** A material for the live furniture that takes part in the same cut-away. */
+    furnitureMaterial() {
+      const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0.05 });
+      material.onBeforeCompile = (shader) => {
+        Object.assign(shader.uniforms, cut);
+        shader.vertexShader = shader.vertexShader
+          .replace("#include <common>", "#include <common>\nvarying vec3 vCutPos;")
+          .replace(
+            "#include <begin_vertex>",
+            `#include <begin_vertex>
+            #ifdef USE_INSTANCING
+              vCutPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;
+            #else
+              vCutPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+            #endif`,
+          );
+        shader.fragmentShader = shader.fragmentShader
+          .replace(
+            "#include <common>",
+            "#include <common>\nvarying vec3 vCutPos;\nuniform float uCutOn;\nuniform vec3 uCutA;\nuniform vec3 uCutB;\nuniform float uCutR;",
+          )
+          .replace(
+            "#include <clipping_planes_fragment>",
+            `#include <clipping_planes_fragment>
+            if (uCutOn > 0.5) {
+              vec3 ab = uCutB - uCutA;
+              float t = clamp(dot(vCutPos - uCutA, ab) / max(dot(ab, ab), 1e-4), 0.0, 1.0);
+              if (t < 0.85 && distance(vCutPos, uCutA + ab * t) < uCutR) discard;
+            }`,
+          );
+      };
+      material.customProgramCacheKey = () => "verlet-furniture";
+      return material;
+    },
     /** Cut away the hall's furniture between `from` and `to`; null turns it off. */
     cutaway(from: THREE.Vector3 | null, to?: THREE.Vector3) {
       cut.uCutOn.value = from && to ? 1 : 0;
