@@ -57,6 +57,8 @@ export interface Item {
   /** Grouping for the condition report — "Computer Laptop", "Cables". Free
    *  text; /reports/categories lists what's already in use. */
   category: string | null;
+  /** The department this item belongs to (see Department); null = none. */
+  department_id?: string | null;
   /** Link to a picture hosted elsewhere. */
   photo_url: string | null;
   /** True when an image was uploaded. The bytes come from /items/:id/photo —
@@ -346,4 +348,27 @@ export interface DetailedPaymentReport {
   count: number;
   rows: DetailedPaymentReportRow[];
   summary: { totalAmount: number; byStatus: Record<string, number> };
+}
+
+/** A team that items can belong to. Admins and stock managers add, rename,
+ *  recolour and remove them; removing one leaves its items with no department. */
+export interface Department {
+  id: string;
+  name: string;
+  /** Hex colour of its dot, e.g. "#5b8fd6". */
+  color: string;
+  created_at: string;
+}
+
+/** One desk on the office map: who sits there and where it stands. Desks the
+ *  API has no row for stand at their place on the floor plan, unassigned. */
+export interface Desk {
+  /** The floor plan's id for the desk, e.g. "soft-workstation-3". */
+  id: string;
+  user_id: string | null;
+  /** Metres from the hall's centre; null = the floor plan's place. */
+  x: number | null;
+  z: number | null;
+  /** Degrees, in steps of 90. */
+  rotation: number | null;
 }

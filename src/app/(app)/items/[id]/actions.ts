@@ -264,6 +264,8 @@ export async function editItem(
   const model = String(formData.get("model") ?? "").trim();
   const specification = String(formData.get("specification") ?? "").trim();
   const category = String(formData.get("category") ?? "").trim();
+  // Present only when the form shows the picker; "none" clears it.
+  const department = formData.get("department_id");
   // Blank clears the photo; the API takes null, not "".
   const photoUrl = String(formData.get("photo_url") ?? "").trim();
   // An uploaded file wins; only one of the two is ever filled.
@@ -306,6 +308,7 @@ export async function editItem(
       // No `sku` — reassigned by the API when the type changes.
       specification: specification || null,
       category: category || null,
+      ...(typeof department === "string" ? { department_id: department === "none" || !department ? null : department } : {}),
       photo_url: photoUrl || null,
       ...(photoData
         ? { photo_data: photoData }

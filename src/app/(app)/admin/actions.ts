@@ -43,6 +43,8 @@ export async function addItem(_prev: AddItemState, formData: FormData): Promise<
   const model = String(formData.get("model") ?? "").trim();
   const specification = String(formData.get("specification") ?? "").trim();
   const category = String(formData.get("category") ?? "").trim();
+  // Present only when the form shows the picker; "none" clears it.
+  const department = formData.get("department_id");
   const locationId = String(formData.get("location_id") ?? "").trim();
   const quantity = Number(String(formData.get("quantity") ?? "").trim()); // Form provides quantity in containers
   const finishable = formData.get("finishable") != null;
@@ -71,6 +73,7 @@ export async function addItem(_prev: AddItemState, formData: FormData): Promise<
       // No `sku` — the API assigns it from the type.
       specification: specification || null,
       category: category || null,
+      ...(typeof department === "string" ? { department_id: department === "none" || !department ? null : department } : {}),
       ...photoFields(formData),
       finishable,
       // Packages ignore units_per_container (quantity is a package count).

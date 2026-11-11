@@ -35,6 +35,9 @@ export const AREA = { x0: -18, x1: 18, z0: -12, z1: 12 };
 export const OFFICES = { z0: -20, z1: -12, corridor: 2, rooms: [-18, -9, 0, 9, 18] };
 /** Where a shelf centre may be placed or moved to. */
 export const FLOOR_BOUNDS = { x0: -17.5, x1: 17.5, z0: -11.5, z1: 11.5 };
+/** Where a desk centre may stand: the hall (z from `hall` to z1) or the small
+ *  offices (z0 to `rooms`); `wall` is the line that decides which side. */
+export const DESK_BOUNDS = { x0: -16.9, x1: 16.9, z0: -19, z1: 10.9, hall: -10.9, rooms: -15.1, wall: -13 };
 /** The glass double door in the north wall. */
 export const DOOR = { x: -5.5, w: 2.0 };
 /** Directions start just inside that door. */
@@ -243,8 +246,30 @@ export function locationHome(name: string, spare: number): Home {
   return { x: -12 + ((spare - SPARE.length) % 8) * 3, z: -2.5, rotation: 0 };
 }
 
-/** 5190 pieces and wall racks that are drawn as live shelves or tables instead. */
+/** A desk people sit at: a workstation of the floor plan, drawn live on the
+ *  office map so its owner can move and turn it. */
+export interface DeskHome extends Home {
+  /** The floor plan's id for the piece, e.g. "soft-workstation-3". */
+  id: string;
+  name: string;
+}
+const ZONE_NAMES: Record<string, string> = {
+  soft: "Software", robo: "Robotics", hard: "Hardware", stock: "Stockroom", field: "Field",
+};
+export const DESKS: DeskHome[] = (() => {
+  const count: Record<string, number> = {};
+  return PIECES.filter((p) => p.kind === "workstation").map((p) => {
+    const office = p.id.match(/^office-(\d)-desk-([ab])$/);
+    const zone = office ? `Office ${Number(office[1]) + 1}` : (ZONE_NAMES[p.id.split("-")[0]] ?? "Hall");
+    const n = (count[zone] = (count[zone] ?? 0) + 1);
+    const degrees = ((Math.round((p.rot * 180) / Math.PI / 90) * 90) % 360 + 360) % 360;
+    return { id: p.id, name: `${zone} desk ${n}`, x: p.x, z: p.z, rotation: degrees };
+  });
+})();
+
+/** 5190 pieces and wall racks that are drawn as live shelves, tables or desks instead. */
 export const REPLACED = new Set<string>([
+  ...DESKS.map((d) => d.id),
   ...Object.values(HOMES).flatMap((h) => (h.replaces ? [h.replaces] : [])),
   ...Object.values(TABLE_HOMES).map((h) => h.replaces),
 ]);

@@ -12,7 +12,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { AddItemForm } from "@/components/dashboard/add-item-form";
-import type { Location } from "@/lib/api/types";
+import type { Department, Location } from "@/lib/api/types";
 
 /**
  * "Add item" as a button + dialog, so the long form no longer pushes the
@@ -21,9 +21,12 @@ import type { Location } from "@/lib/api/types";
 export function AddItemDialog({
   locations,
   categories,
+  departments,
 }: {
   locations: Location[];
   categories: string[];
+  /** null when the API has no departments: the form leaves the field out. */
+  departments?: Department[] | null;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -39,7 +42,7 @@ export function AddItemDialog({
           <DialogDescription>Add to the catalog. The SKU is assigned for you.</DialogDescription>
         </DialogHeader>
         <div className="overflow-y-auto">
-          <AddItemForm locations={locations} categories={categories} onAdded={() => setOpen(false)} />
+          <AddItemForm locations={locations} categories={categories} departments={departments} onAdded={() => setOpen(false)} />
         </div>
       </DialogContent>
     </Dialog>

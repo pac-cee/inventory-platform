@@ -9,12 +9,15 @@ export function shelfLevels(requested: number | undefined, boxCount: number) {
     ),
   );
 }
-export function snapShelf(p: Placement): Placement {
-  return clampPlacement({
-    ...p,
-    x: Math.round(p.x * 2) / 2,
-    z: Math.round(p.z * 2) / 2,
-  });
+export function snapShelf(p: Placement, desk = false): Placement {
+  return clampPlacement(
+    {
+      ...p,
+      x: Math.round(p.x * 2) / 2,
+      z: Math.round(p.z * 2) / 2,
+    },
+    desk,
+  );
 }
 export function emptyShelfCopy(s: SpatialShelf, id: string): SpatialShelf {
   return {

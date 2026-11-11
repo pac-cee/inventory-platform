@@ -52,3 +52,32 @@ describe("mockRequest", () => {
     expect(again[0].full_name).not.toBe("Changed by caller");
   });
 });
+
+describe("departments and desks", () => {
+  it("starts with the floor's departments and keeps new, renamed and removed ones", async () => {
+    const before = await mockRequest<Data[]>("GET", "/departments");
+    expect(before.map((d) => d.name)).toContain("Robotics");
+    const ops = await mockRequest<Data>("POST", "/departments", { name: "Operations", color: "#4fa9b3" });
+    await mockRequest("PATCH", `/departments/${ops.id}`, { name: "Ops" });
+    expect((await mockRequest<Data[]>("GET", "/departments")).find((d) => d.id === ops.id)).toMatchObject({ name: "Ops", color: "#4fa9b3" });
+    await expect(mockRequest("POST", "/departments", { name: "ops", color: "#000000" })).rejects.toBeInstanceOf(MockError);
+
+    const [item] = await mockRequest<Data[]>("GET", "/items?limit=200&offset=0");
+    await mockRequest("PATCH", `/items/${item.id}`, { department_id: ops.id });
+    expect(await mockRequest<Data>("GET", `/items/${item.id}`)).toMatchObject({ department_id: ops.id });
+
+    // Removing the department keeps the item, with no department.
+    expect(await mockRequest<Data>("DELETE", `/departments/${ops.id}`)).toEqual({ cleared: 1 });
+    expect((await mockRequest<Data>("GET", `/items/${item.id}`)).department_id).toBeNull();
+    expect((await mockRequest<Data[]>("GET", "/departments")).some((d) => d.id === ops.id)).toBe(false);
+  });
+
+  it("remembers where a desk stands and who sits there", async () => {
+    expect(await mockRequest<Data[]>("GET", "/desks")).toEqual([]);
+    await mockRequest("PUT", "/desks/soft-workstation-3", { x: 2, z: 3, rotation: 90 });
+    await mockRequest("PUT", "/desks/soft-workstation-3", { user_id: "someone" });
+    expect(await mockRequest<Data[]>("GET", "/desks")).toEqual([
+      { id: "soft-workstation-3", user_id: "someone", x: 2, z: 3, rotation: 90 },
+    ]);
+  });
+});

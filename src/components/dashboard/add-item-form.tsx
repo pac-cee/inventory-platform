@@ -16,7 +16,8 @@ import {
 } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { addItem, type AddItemState } from "@/app/(app)/admin/actions";
-import type { Location } from "@/lib/api/types";
+import type { Department, Location } from "@/lib/api/types";
+import { DepartmentField } from "@/components/dashboard/department-field";
 
 /**
  * Add an item. Identified by type + name + model; the free-text specification
@@ -28,6 +29,7 @@ import type { Location } from "@/lib/api/types";
 export function AddItemForm({
   locations,
   categories = [],
+  departments,
   onAdded,
 }: {
   locations: Location[];
@@ -36,6 +38,7 @@ export function AddItemForm({
   /** Categories already in use, offered as suggestions so free text doesn't
    *  drift and split the condition report's grouping. */
   categories?: string[];
+  departments?: Department[] | null;
 }) {
   const [state, formAction, pending] = useActionState<AddItemState, FormData>(addItem, {});
   const formRef = useRef<HTMLFormElement>(null);
@@ -165,6 +168,8 @@ export function AddItemForm({
           Groups this item on the condition report.
         </p>
       </div>
+
+      {departments?.length ? <DepartmentField idPrefix="add" departments={departments} /> : null}
 
       <PhotoField key={photoKey} idPrefix="add" />
 

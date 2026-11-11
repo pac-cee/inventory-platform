@@ -26,7 +26,7 @@ import {
   type ObjectPose,
 } from "@/lib/spatial/camera";
 import type { FloorPoint } from "@/lib/spatial/directions";
-import { type SpatialShelf } from "@/lib/spatial/model";
+import { isDeskId, type SpatialShelf } from "@/lib/spatial/model";
 
 /** Inventory shelves are drawn as the stockroom's pine units: 2 m wide, four
  *  boxes per level (the slot order matches lib/spatial/box-placement). */
@@ -359,12 +359,60 @@ export function createOffice(
   // Tables are the 5190 workbench; shelves are its pine shelving units.
   const kitMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0.05 });
   const PINE = "#d6a56b", PINE_BACK = "#bf9058";
+  // Desks are one instanced mesh (one draw call for all of them); each has a
+  // group that holds its place, its ring and its hit box, and the instance
+  // follows the group while it is dragged.
+  const deskList = shelves.filter((s) => s.kind === "desk");
+  const deskMesh = deskList.length
+    ? new THREE.InstancedMesh(kitGeometry("workstation").clone(), kitMat, deskList.length)
+    : null;
+  const deskIndex = new Map<string, number>();
+  if (deskMesh) {
+    deskMesh.castShadow = deskMesh.receiveShadow = true;
+    scene.add(deskMesh);
+  }
+  function syncDesk(id: string) {
+    const group = groups.get(id), index = deskIndex.get(id);
+    if (!deskMesh || !group || index === undefined) return;
+    group.updateMatrix();
+    deskMesh.setMatrixAt(index, group.matrix);
+    deskMesh.instanceMatrix.needsUpdate = true;
+    deskMesh.computeBoundingSphere();
+  }
   for (const shelf of shelves) {
     const group = new THREE.Group();
     group.position.set(shelf.x, 0, shelf.z);
     group.rotation.y = THREE.MathUtils.degToRad(shelf.rotation);
     scene.add(group);
     groups.set(shelf.id, group);
+    if (shelf.kind === "desk") {
+      deskIndex.set(shelf.id, deskIndex.size);
+      syncDesk(shelf.id);
+      group.userData.tagY = 1.5;
+      // Lit only when it is yours, hovered or selected, so 26 desks stay quiet.
+      const ring = new THREE.Mesh(
+        new THREE.BoxGeometry(1.9, 0.035, 1.8),
+        new THREE.MeshBasicMaterial({ color: 0x9db7a4, transparent: true, opacity: 0.2 }),
+      );
+      ring.position.y = 0.02;
+      ring.userData.desk = true;
+      ring.userData.mine = !!shelf.mine;
+      ring.visible = !!shelf.mine;
+      group.add(ring);
+      rings.set(shelf.id, ring);
+      // Only desks this person may move can be picked up.
+      if (!shelf.locked) {
+        const hit = new THREE.Mesh(
+          new THREE.BoxGeometry(1.7, 1.2, 1.6),
+          new THREE.MeshBasicMaterial({ visible: false }),
+        );
+        hit.position.y = 0.6;
+        hit.userData.shelfId = shelf.id;
+        group.add(hit);
+        targets.push(hit);
+      }
+      continue;
+    }
     if (shelf.kind === "table") {
       const bench = new THREE.Mesh(kitGeometry("bench").clone(), kitMat);
       bench.castShadow = bench.receiveShadow = true;
@@ -476,19 +524,28 @@ export function createOffice(
   const tags = new Map<string, { el: HTMLButtonElement; group: THREE.Group; w: number; h: number }>();
   for (const shelf of shelves) {
     const group = groups.get(shelf.id);
+    // Tables have no tag; of the desks, only your own does.
     if (shelf.kind === "table" || !group) continue;
+    if (shelf.kind === "desk" && !shelf.mine) continue;
     const boxes = shelf.boxes?.length ?? 0;
     const el = document.createElement("button");
     el.type = "button";
     el.className = "spatial-tag";
-    if (!shelf.items.some((i) => i.quantity > 0)) el.classList.add("is-empty");
     const name = document.createElement("span");
-    name.textContent = shelf.name;
-    const count = document.createElement("span");
-    count.className = "spatial-tag-count";
-    count.textContent = String(boxes);
-    el.append(name, count);
-    el.setAttribute("aria-label", `Open ${shelf.name}, ${boxes} ${boxes === 1 ? "box" : "boxes"}`);
+    if (shelf.kind === "desk") {
+      el.classList.add("is-desk");
+      name.textContent = "Your desk";
+      el.append(name);
+      el.setAttribute("aria-label", `Your desk, ${shelf.name}. Move or turn it`);
+    } else {
+      if (!shelf.items.some((i) => i.quantity > 0)) el.classList.add("is-empty");
+      name.textContent = shelf.name;
+      const count = document.createElement("span");
+      count.className = "spatial-tag-count";
+      count.textContent = String(boxes);
+      el.append(name, count);
+      el.setAttribute("aria-label", `Open ${shelf.name}, ${boxes} ${boxes === 1 ? "box" : "boxes"}`);
+    }
     el.addEventListener("click", (event) => {
       event.stopPropagation();
       select(shelf.id);
@@ -553,7 +610,8 @@ export function createOffice(
     rings.forEach((ring, key) => {
       const m = ring.material as THREE.MeshBasicMaterial;
       const chosen = key === selectedShelf, lit = key === hoveredShelf;
-      m.opacity = chosen ? 0.8 : lit ? 0.55 : 0.2;
+      m.opacity = chosen ? 0.8 : lit ? 0.55 : ring.userData.mine ? 0.45 : 0.2;
+      if (ring.userData.desk) ring.visible = chosen || lit || ring.userData.mine;
       m.color.set(
         chosen || lit
           ? "#df799a"
@@ -843,6 +901,7 @@ export function createOffice(
         rings.forEach((r, key) => {
           (r.material as THREE.MeshBasicMaterial).opacity =
             key === hit.shelfId ? 0.8 : 0.2;
+          if (key === hit.shelfId) r.visible = true;
         });
         drag = {
           id: hit.shelfId,
@@ -896,6 +955,7 @@ export function createOffice(
       const g = groups.get(d.id)!;
       if (gesture) {
         g.position.copy(d.origin);
+        syncDesk(d.id);
         return;
       }
       if (Math.hypot(e.clientX - down.x, e.clientY - down.y) >= 6)
@@ -918,6 +978,7 @@ export function createOffice(
     restoreBoxDrag();
     if (drag) {
       groups.get(drag.id)?.position.copy(drag.origin);
+      syncDesk(drag.id);
       drag = null;
       controls.enabled = true;
     }
@@ -961,8 +1022,9 @@ export function createOffice(
       const point = floorPoint(e);
       if (point) {
         point.sub(drag.offset);
-        const p = snapShelf({ x: point.x, z: point.z, rotation: 0 });
+        const p = snapShelf({ x: point.x, z: point.z, rotation: 0 }, isDeskId(drag.id));
         groups.get(drag.id)?.position.set(p.x, 0, p.z);
+        syncDesk(drag.id);
       }
       return;
     }

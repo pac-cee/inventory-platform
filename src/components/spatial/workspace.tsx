@@ -38,6 +38,7 @@ import {
   Crosshair,
   Map,
   Minus,
+  Monitor,
   MousePointer2,
   Move,
   Plus,
@@ -51,6 +52,9 @@ import {
 import { VerletLogo } from "@/components/ui/verlet-logo";
 import {
   clampPlacement,
+  isDeskId,
+  isShelf,
+  DESK_PREFIX,
   readLayout,
   type Layout,
   type SpatialShelf,
@@ -60,6 +64,7 @@ import { readDraft, type SpatialDraft } from "@/lib/spatial/draft";
 import type { createOffice } from "./office-scene";
 import { FloorSketch } from "./floor-sketch";
 import "./workspace.css";
+import { saveDesks } from "@/app/(spatial)/space/actions";
 
 import { BoxInspector } from "./box-inspector";
 import { ScanPanel } from "./scan-panel";
@@ -94,7 +99,13 @@ export function SpatialWorkspace({
   userId,
   profile,
   catalog,
+  desks = [],
+  people = [],
 }: {
+  /** The floor's desks: where each stands and who sits there. */
+  desks?: SpatialShelf[];
+  /** People a desk can be given to; empty unless this person may assign desks. */
+  people?: { id: string; name: string }[];
   shelves: SpatialShelf[];
   userId: string;
   profile: Capable | null;
@@ -138,6 +149,8 @@ export function SpatialWorkspace({
   const [extras, setExtras] = useState<SpatialShelf[]>([]);
   const [itemEdits, setItemEdits] = useState<SpatialDraft["items"]>({});
   const [boxMap, setBoxMap] = useState<BoxMap>({});
+  // Desk id -> who sits there, for changes not yet saved.
+  const [owners, setOwners] = useState<Record<string, string | null>>({});
   const [previewTarget, setPreviewTarget] = useState<string | null>(null);
   const previewReturn = useRef<ReturnType<Scene["snapshot"]> | null>(null);
   const [selectedBox, setSelectedBox] = useState<string | null>(null);
@@ -195,7 +208,21 @@ export function SpatialWorkspace({
   const [saved, setSaved] = useState(false);
   const objects = useMemo(
     () =>
-      [...initialShelves, ...OFFICE_TABLES, ...extras]
+      [
+        ...initialShelves,
+        ...OFFICE_TABLES,
+        ...desks.map((d) =>
+          d.id in owners
+            ? {
+                ...d,
+                owner: owners[d.id],
+                ownerName: people.find((p) => p.id === owners[d.id])?.name ?? null,
+                mine: owners[d.id] === userId,
+              }
+            : d,
+        ),
+        ...extras,
+      ]
         .filter((s) => !hidden.includes(s.id))
         .map((s) => {
           const boxes = resolveSlots(
@@ -208,10 +235,10 @@ export function SpatialWorkspace({
             items: boxes.flatMap((b) => b.items),
           };
         }),
-    [initialShelves, extras, layout, itemEdits, boxMap, hidden],
+    [initialShelves, desks, owners, people, userId, extras, layout, itemEdits, boxMap, hidden],
   );
   const shelves = useMemo(
-    () => objects.filter((s) => s.kind !== "table"),
+    () => objects.filter(isShelf),
     [objects],
   );
   const route = useMemo(() => {
@@ -223,6 +250,7 @@ export function SpatialWorkspace({
           officeObstacles(
             shelves,
             objects.filter((s) => s.kind === "table"),
+            objects.filter((s) => s.kind === "desk"),
           ),
         )
       : null;
@@ -309,7 +337,20 @@ export function SpatialWorkspace({
             setSelectedBox(boxId ?? null);
             return;
           }
-          if (objects.find((o) => o.id === id)?.kind === "table") return;
+          const picked = objects.find((o) => o.id === id);
+          if (picked?.kind === "desk" && !picked.locked) {
+            // Your desk's tag: open the plan editor on it, ready to drag or turn.
+            setArranging(false);
+            setBuilderTab("objects");
+            setRouteTarget(null);
+            setSelected(id);
+            setSelectedBox(null);
+            setScan(false);
+            setActiveTab(MAP_TAB);
+            setEdit(true);
+            setPlan(true);
+          }
+          if (!picked || !isShelf(picked)) return;
           setSelected(id);
           setSelectedBox(boxId ?? null);
           setScan(false);
@@ -407,7 +448,7 @@ export function SpatialWorkspace({
       checkpoint();
       setLayout((v) => ({
         ...v,
-        [id]: clampPlacement({ ...objects.find((s) => s.id === id)!, x, z }),
+        [id]: clampPlacement({ ...objects.find((s) => s.id === id)!, x, z }, isDeskId(id)),
       }));
       setSelected(id);
       setBuilderTab("objects");
@@ -442,13 +483,47 @@ export function SpatialWorkspace({
     checkpoint();
     setLayout((value) => ({
       ...value,
-      [active.id]: clampPlacement({ ...active, ...patch }),
+      [active.id]: clampPlacement({ ...active, ...patch }, isDeskId(active.id)),
     }));
     setSaved(false);
   }
+  const [savingDesks, setSavingDesks] = useState(false);
+  const deskDirty = objects.some(
+    (o) => o.kind === "desk" && !o.locked && (layout[o.id] || o.id in owners),
+  );
+  /** Desks are shared: their place and owner go to the server, not this device. */
+  async function saveDeskChanges() {
+    const changes = objects
+      .filter((o) => o.kind === "desk" && !o.locked && (layout[o.id] || o.id in owners))
+      .map((o) => ({
+        id: o.id.slice(DESK_PREFIX.length),
+        x: o.x,
+        z: o.z,
+        rotation: o.rotation,
+        ...(o.id in owners ? { user_id: owners[o.id] } : {}),
+      }));
+    if (!changes.length) return;
+    setSavingDesks(true);
+    try {
+      const result = await saveDesks(changes);
+      setNotice(
+        result.error
+          ? `Desks were not all saved: ${result.error}`
+          : `${result.saved === 1 ? "1 desk" : `${result.saved} desks`} saved for everyone. The rest of the plan is saved on this device.`,
+      );
+    } catch {
+      setNotice("Could not reach the server, so desk changes are not saved yet. Try Save again.");
+    } finally {
+      setSavingDesks(false);
+    }
+  }
   function save() {
     try {
-      localStorage.setItem(storageKey, JSON.stringify(layout));
+      // Desks are saved for everyone below, so they stay out of this device's plan.
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify(Object.fromEntries(Object.entries(layout).filter(([id]) => !isDeskId(id)))),
+      );
       localStorage.setItem(`${storageKey}:hidden`, JSON.stringify(hidden));
       localStorage.setItem(
         `${storageKey}:draft`,
@@ -457,6 +532,7 @@ export function SpatialWorkspace({
       localStorage.setItem(`${storageKey}:boxes`, JSON.stringify(boxMap));
       setSaved(true);
       setNotice("Saved on this device. Inventory records are unchanged.");
+      void saveDeskChanges();
     } catch {
       setNotice(
         "Browser storage is full or unavailable. Your layout is still available in this session.",
@@ -526,7 +602,7 @@ export function SpatialWorkspace({
     setSelectedBox(id);
   }
   function addSingleBox(slot?: number) {
-    if (!active || active.kind === "table") return;
+    if (!active || !isShelf(active)) return;
     checkpoint();
     const b: StorageBox = {
       id: crypto.randomUUID(),
@@ -538,7 +614,7 @@ export function SpatialWorkspace({
     setSelectedBox(b.id);
   }
   function copySelection() {
-    if (!active) return;
+    if (!active || active.kind === "desk") return;
     const b = arranging
       ? active.boxes.find((b) => b.id === selectedBox)
       : undefined;
@@ -552,7 +628,7 @@ export function SpatialWorkspace({
   function pasteSelection() {
     if (!clipboard) return;
     if (clipboard.kind === "box") {
-      if (!active || active.kind === "table") {
+      if (!active || !isShelf(active)) {
         setNotice("Select a shelf to paste the box.");
         return;
       }
@@ -583,14 +659,14 @@ export function SpatialWorkspace({
   useEffect(() => {
     boxMoveRef.current = moveBox;
     engine.current?.arrange(
-      arranging && edit && active?.kind !== "table"
-        ? (active?.id ?? null)
+      arranging && edit && active && isShelf(active)
+        ? active.id
         : null,
       (id, slot) => boxMoveRef.current(id, slot),
     );
   });
   function removeObject() {
-    if (!active) return;
+    if (!active || active.kind === "desk") return;
     checkpoint();
     setHidden((v) => [...v, active.id]);
     setSelected(null);
@@ -979,20 +1055,29 @@ export function SpatialWorkspace({
                     </div>
                   ) : (
                     <div className="spatial-object-list">
-                      {objects.map((o) => (
-                        <button
-                          key={o.id}
-                          aria-pressed={selected === o.id}
-                          onClick={() => choose(o.id)}
-                        >
-                          {o.kind === "table" ? (
-                            <Table2 size={16} />
-                          ) : (
-                            <Boxes size={16} />
-                          )}
-                          <span>{o.name}</span>
-                        </button>
-                      ))}
+                      {objects
+                        .filter((o) => !o.locked)
+                        .map((o) => (
+                          <button
+                            key={o.id}
+                            aria-pressed={selected === o.id}
+                            onClick={() => choose(o.id)}
+                          >
+                            {o.kind === "desk" ? (
+                              <Monitor size={16} />
+                            ) : o.kind === "table" ? (
+                              <Table2 size={16} />
+                            ) : (
+                              <Boxes size={16} />
+                            )}
+                            <span>
+                              {o.name}
+                              {o.kind === "desk" && o.ownerName ? (
+                                <small> · {o.mine ? "you" : o.ownerName}</small>
+                              ) : null}
+                            </span>
+                          </button>
+                        ))}
                     </div>
                   )}
                 </>
@@ -1037,7 +1122,16 @@ export function SpatialWorkspace({
                         Back to room view
                       </button>
                     )}
-                  {!selectedBox && (
+                  {active.kind === "desk" && (
+                    <p className="spatial-desk-owner">
+                      {active.mine
+                        ? "This is your desk."
+                        : active.ownerName
+                          ? `${active.ownerName} sits here.`
+                          : "Nobody sits here yet."}
+                    </p>
+                  )}
+                  {!selectedBox && active.kind !== "desk" && (
                     <button
                       className="spatial-button spatial-inspect-box"
                       aria-pressed={previewTarget === active.id}
@@ -1049,7 +1143,7 @@ export function SpatialWorkspace({
                         : "Preview shelf"}
                     </button>
                   )}
-                  {!edit && (
+                  {!edit && active.kind !== "desk" && (
                     <button
                       className="spatial-button spatial-directions-button"
                       onClick={() => showDirections(active.id)}
@@ -1068,30 +1162,54 @@ export function SpatialWorkspace({
                           }
                         >
                           <RotateCw size={16} />
-                          Rotate
+                          {active.kind === "desk" ? "Turn 90°" : "Rotate"}
                         </button>
-                        <button
-                          className="spatial-button"
-                          onClick={copySelection}
-                        >
-                          <Copy size={16} />
-                          {arranging && selectedBox ? "Copy box" : "Copy"}
-                        </button>
-                        <button
-                          className="spatial-button"
-                          onClick={removeObject}
-                        >
-                          <Trash2 size={16} />
-                          Remove
-                        </button>
+                        {active.kind !== "desk" && (
+                          <>
+                            <button
+                              className="spatial-button"
+                              onClick={copySelection}
+                            >
+                              <Copy size={16} />
+                              {arranging && selectedBox ? "Copy box" : "Copy"}
+                            </button>
+                            <button
+                              className="spatial-button"
+                              onClick={removeObject}
+                            >
+                              <Trash2 size={16} />
+                              Remove
+                            </button>
+                          </>
+                        )}
                       </div>
+                      {active.kind === "desk" && people.length > 0 && (
+                        <label>
+                          Who sits here
+                          <select
+                            aria-label={`Who sits at ${active.name}`}
+                            value={active.owner ?? ""}
+                            onChange={(e) => {
+                              setOwners((v) => ({ ...v, [active.id]: e.target.value || null }));
+                              setSaved(false);
+                            }}
+                          >
+                            <option value="">Nobody</option>
+                            {people.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
                       <p className="spatial-edit-hint">
                         {arranging ? (
                           "Drag boxes in 3D or use the shelf grid below."
                         ) : (
                           <>
                             Drag the whole{" "}
-                            {active.kind === "table" ? "table" : "shelf"} on the
+                            {active.kind === "desk" ? "desk" : active.kind === "table" ? "table" : "shelf"} on the
                             canvas. Snaps to 0.5 m.
                           </>
                         )}
@@ -1106,7 +1224,7 @@ export function SpatialWorkspace({
                           <button
                             key={name}
                             className="spatial-button"
-                            aria-label={`Move shelf ${name}`}
+                            aria-label={`Move ${active.kind === "desk" ? "desk" : "shelf"} ${name}`}
                             onClick={() =>
                               updatePlacement({
                                 x: active.x + x,
@@ -1145,7 +1263,7 @@ export function SpatialWorkspace({
                           />
                         </label>
                       )}
-                      {active.kind !== "table" && (
+                      {isShelf(active) && (
                         <>
                           <label>
                             Levels{" "}
@@ -1252,13 +1370,15 @@ export function SpatialWorkspace({
                 </section>
               ) : null}
               {(edit || active) && (
-                <button className="spatial-save" onClick={save}>
-                  {saved ? <Check size={16} /> : <Check size={16} />}{" "}
-                  {saved ? "Saved" : "Save locally"}
+                <button className="spatial-save" onClick={save} disabled={savingDesks}>
+                  <Check size={16} />{" "}
+                  {savingDesks ? "Saving…" : saved ? "Saved" : deskDirty ? "Save" : "Save locally"}
                 </button>
               )}
               <p className="spatial-local-note">
-                Prototype changes save on this device only.
+                {desks.some((d) => !d.locked)
+                  ? "Desks save for everyone. Other plan changes save on this device only."
+                  : "Prototype changes save on this device only."}
               </p>
             </aside>
           )}

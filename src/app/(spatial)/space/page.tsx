@@ -8,10 +8,12 @@ import type {
   Item,
   Location,
   StockLevel,
+  Desk,
 } from "@/lib/api/types";
-import type { SpatialShelf } from "@/lib/spatial/model";
+import { DESK_PREFIX, clampPlacement, type SpatialShelf } from "@/lib/spatial/model";
+import { canManageInventory } from "@/lib/roles";
 import { SpatialWorkspace } from "@/components/spatial/workspace";
-import { isKnownLocation, locationHome } from "@/lib/spatial/verlet-site";
+import { DESKS, isKnownLocation, locationHome } from "@/lib/spatial/verlet-site";
 
 export default async function SpacePage() {
   const api = serverApi();
@@ -74,9 +76,37 @@ export default async function SpacePage() {
         capacity: row.capacity,
       })),
   }));
+  // Desks: where each stands and who sits there. null when the API has no
+  // desks yet; they are then part of the room and cannot be moved.
+  const [saved, people] = await Promise.all([
+    api.get<Desk[]>("/desks").catch(() => null),
+    api.get<Profile[]>("/profiles").catch(() => [] as Profile[]),
+  ]);
+  const manager = canManageInventory(profile);
+  const nameOf = new Map(people.map((p) => [p.id, p.full_name ?? p.email ?? "Unnamed"]));
+  const desks: SpatialShelf[] = DESKS.map((home) => {
+    const row = saved?.find((d) => d.id === home.id);
+    const owner = row?.user_id ?? null;
+    const placed = row && row.x !== null && row.z !== null && row.rotation !== null;
+    return {
+      id: `${DESK_PREFIX}${home.id}`,
+      kind: "desk" as const,
+      name: home.name,
+      ...(placed
+        ? clampPlacement({ x: row.x!, z: row.z!, rotation: row.rotation! }, true)
+        : { x: home.x, z: home.z, rotation: home.rotation }),
+      owner,
+      ownerName: owner ? (nameOf.get(owner) ?? (owner === user.id ? "You" : "Someone")) : null,
+      mine: owner === user.id,
+      locked: !saved || !(manager || owner === user.id),
+      items: [],
+    };
+  });
   return (
     <SpatialWorkspace
       shelves={shelves}
+      desks={desks}
+      people={manager && saved ? people.filter((p) => !p.blocked).map((p) => ({ id: p.id, name: p.full_name ?? p.email ?? "Unnamed" })) : []}
       userId={user.id}
       profile={profile}
       catalog={items.map((i) => ({

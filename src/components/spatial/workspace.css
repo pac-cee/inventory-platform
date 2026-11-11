@@ -1710,3 +1710,39 @@
 .spatial-camera-controls {
   z-index: 3;
 }
+
+/* Desks: your own desk's tag, who sits where, and the picker to assign one. */
+.spatial-tag.is-desk::before {
+  background: #df799a;
+}
+.spatial-desk-owner {
+  margin: 8px 0 16px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #b7b7c2;
+}
+.spatial-direct-editor label select {
+  display: block;
+  width: 100%;
+  min-height: 40px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid #3b3b40;
+  border-radius: 9px;
+  background: #242427;
+  color: #eee;
+  font: inherit;
+  font-size: 13px;
+}
+.spatial-direct-editor label select:focus-visible {
+  outline: 2px solid #d47d9c;
+  outline-offset: 2px;
+}
+.spatial-object-list button small {
+  color: #92929e;
+  font-size: inherit;
+}
+.spatial-save:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}

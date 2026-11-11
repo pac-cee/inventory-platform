@@ -26,6 +26,7 @@ import type {
   Suggestion,
   Loan,
   Reservation,
+  Department,
 } from "@/lib/api/types";
 import { formatQuantity, isPackaged } from "@/lib/quantity";
 import { canManageInventory } from "@/lib/roles";
@@ -75,6 +76,7 @@ export default async function ItemDetailPage({
     holders,
     allStock,
     categories,
+    departments,
     suggestions,
     loans,
     reservations,
@@ -88,6 +90,7 @@ export default async function ItemDetailPage({
     api.get<Holder[]>(`/items/${id}/holders`).catch(() => [] as Holder[]),
     api.get<StockLevel[]>("/stock").catch(() => [] as StockLevel[]),
     api.get<string[]>("/reports/categories").catch(() => [] as string[]),
+    api.get<Department[]>("/departments").catch(() => null),
     api
       .get<Suggestion[]>(`/suggestions?item_id=${id}`)
       .catch(() => [] as Suggestion[]),
@@ -485,6 +488,7 @@ export default async function ItemDetailPage({
                         null
                       }
                       categories={categories}
+                      departments={departments}
                     />
                   ),
                 },

@@ -1,5 +1,6 @@
 import type { Placement } from "./model";
 import {
+  DESKS,
   ENTRANCE,
   FLOOR_BOUNDS,
   TABLE_HOMES,
@@ -31,7 +32,15 @@ export function shelfApproach(shelf: Placement): FloorPoint {
 export function officeObstacles(
   shelves: Placement[],
   tables?: Placement[],
+  desks?: Placement[],
 ): Obstacle[] {
+  // Desks stand where the floor plan puts them until someone moves theirs.
+  const seats = (desks ?? DESKS).map((d) => {
+    const rotated = Math.abs(Math.sin((d.rotation * Math.PI) / 180)) > 0.5;
+    const x = rotated ? 0.95 : 1.0,
+      z = rotated ? 1.0 : 0.95;
+    return { minX: d.x - x, maxX: d.x + x, minZ: d.z - z, maxZ: d.z + z };
+  });
   // Tables stand on the 5190 benches by default; moved tables go with them.
   const furniture = (tables ?? Object.values(TABLE_HOMES)).map((t) => {
     const rotated = Math.abs(Math.sin((t.rotation * Math.PI) / 180)) > 0.5;
@@ -41,6 +50,7 @@ export function officeObstacles(
   });
   return [
     ...furniture,
+    ...seats,
     ...siteObstacles(),
     ...shelves.map((s) => {
       const rotated = Math.abs(Math.sin((s.rotation * Math.PI) / 180)) > 0.5;

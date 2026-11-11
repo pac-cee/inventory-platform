@@ -40,8 +40,8 @@ export function FloorSketch({ shelves }: { shelves: SpatialShelf[] }) {
         <rect key={`${x},${z}`} className="floor-sketch-column" x={x - 0.25} y={z - 0.25} width={0.5} height={0.5} style={step()} />
       ))}
       {shelves.map((s) => {
-        const table = s.kind === "table";
-        const sw = 2, sd = table ? 1 : 0.5;
+        const table = s.kind === "table" || s.kind === "desk";
+        const sw = s.kind === "desk" ? 1.6 : 2, sd = s.kind === "desk" ? 1.5 : table ? 1 : 0.5;
         return (
           <rect
             key={s.id}

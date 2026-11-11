@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { shelfFill, clampPlacement, readLayout } from "./model";
+import { shelfFill, clampPlacement, readLayout, isShelf, isDeskId } from "./model";
+import { DESKS, REPLACED } from "./verlet-site";
 
 describe("spatial inventory", () => {
   it("renders an empty shelf when stock is zero", () => {
@@ -24,5 +25,28 @@ describe("spatial inventory", () => {
     expect(readLayout('{"a":{"x":2,"z":3,"rotation":90}}')).toEqual({
       a: { x: 2, z: 3, rotation: 90 },
     });
+  });
+});
+
+describe("desks", () => {
+  it("keeps a desk in the hall or the small offices, never in the wall or corridor", () => {
+    expect(clampPlacement({ x: 0, z: -11.8, rotation: 0 }, true).z).toBe(-10.9);
+    expect(clampPlacement({ x: 0, z: -14, rotation: 0 }, true).z).toBe(-15.1);
+    expect(clampPlacement({ x: 0, z: -17, rotation: 0 }, true).z).toBe(-17);
+    expect(clampPlacement({ x: 40, z: 40, rotation: 0 }, true)).toMatchObject({ x: 16.9, z: 10.9 });
+  });
+  it("turns in steps of 90 degrees", () => {
+    expect(clampPlacement({ x: 0, z: 0, rotation: 450 }, true).rotation).toBe(90);
+    expect(clampPlacement({ x: 0, z: 0, rotation: -90 }, true).rotation).toBe(270);
+  });
+  it("leaves every desk where the floor plan put it", () => {
+    for (const desk of DESKS) expect(clampPlacement(desk, true)).toMatchObject({ x: desk.x, z: desk.z, rotation: desk.rotation });
+    expect(new Set(DESKS.map((desk) => desk.name)).size).toBe(DESKS.length);
+    expect(DESKS.every((desk) => REPLACED.has(desk.id))).toBe(true);
+  });
+  it("tells shelves from furniture", () => {
+    expect(isShelf({})).toBe(true);
+    expect(isShelf({ kind: "desk" })).toBe(false);
+    expect(isDeskId("desk:soft-workstation-3")).toBe(true);
   });
 });

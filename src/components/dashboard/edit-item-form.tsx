@@ -15,7 +15,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { editItem, type EditItemState } from "@/app/(app)/items/[id]/actions";
-import type { Item } from "@/lib/api/types";
+import type { Department, Item } from "@/lib/api/types";
+import { DepartmentField } from "@/components/dashboard/department-field";
 
 type Mode = "units" | "container" | "package";
 
@@ -34,12 +35,15 @@ export function EditItemForm({
   item,
   containerLabel,
   categories = [],
+  departments,
 }: {
   item: Item;
   containerLabel?: string | null;
   /** Categories already in use, offered as suggestions so free text doesn't
    *  drift into "Cables" / "cables" / "Cable" and split the report's grouping. */
   categories?: string[];
+  /** null or empty: the form leaves the department field out. */
+  departments?: Department[] | null;
 }) {
   const action = editItem.bind(null, item.id);
   const [state, formAction, pending] = useActionState<EditItemState, FormData>(action, {});
@@ -113,6 +117,9 @@ export function EditItemForm({
             Groups this item on the condition report.
           </p>
         </div>
+        {departments?.length ? (
+          <DepartmentField idPrefix="edit" departments={departments} defaultValue={item.department_id} />
+        ) : null}
         <div className="sm:col-span-2">
           <PhotoField
             idPrefix="edit"
