@@ -19,6 +19,7 @@ export function CategoryChips({
   total,
   uncategorized,
   query,
+  department,
 }: {
   categories: CategoryChip[];
   /** "" = all; UNCATEGORIZED = items with none; otherwise the exact category. */
@@ -26,6 +27,8 @@ export function CategoryChips({
   total: number;
   uncategorized: number;
   query?: string;
+  /** The department filter in force, kept when a category is picked. */
+  department?: string;
 }) {
   const chips: {
     key: string;
@@ -38,14 +41,14 @@ export function CategoryChips({
       key: "all",
       label: "All",
       count: total,
-      href: categoryHref(null, query),
+      href: categoryHref(null, query, department),
       on: !active,
     },
     ...categories.map((c) => ({
       key: `c:${c.category}`,
       label: c.category,
       count: c.items,
-      href: categoryHref(c.category, query),
+      href: categoryHref(c.category, query, department),
       on: active === c.category,
     })),
     ...(uncategorized > 0
@@ -54,7 +57,7 @@ export function CategoryChips({
             key: "none",
             label: "Uncategorized",
             count: uncategorized,
-            href: categoryHref(UNCATEGORIZED, query),
+            href: categoryHref(UNCATEGORIZED, query, department),
             on: active === UNCATEGORIZED,
           },
         ]

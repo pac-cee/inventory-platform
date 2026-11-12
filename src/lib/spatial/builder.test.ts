@@ -22,10 +22,15 @@ describe("shelf builder", () => {
     expect(shelfLevels(5, 0)).toBe(5);
   });
   it("snaps movement to half metres inside the floor", () => {
-    expect(snapShelf({ x: 12.2, z: -6.2, rotation: 90 })).toEqual({
-      x: 8,
-      z: -5,
+    expect(snapShelf({ x: 10.2, z: -6.2, rotation: 90 })).toEqual({
+      x: 10,
+      z: -6,
       rotation: 90,
+    });
+    expect(snapShelf({ x: 40, z: -30, rotation: 0 })).toEqual({
+      x: 11.5,
+      z: -11.5,
+      rotation: 0,
     });
     expect(snapShelf({ x: 1.3, z: 2.1, rotation: 0 }).x).toBe(1.5);
   });

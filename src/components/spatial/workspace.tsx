@@ -16,8 +16,26 @@ import {
 import {
   shelfLevels,
   emptyShelfCopy,
-  OFFICE_TABLES,
+  officeTables,
 } from "@/lib/spatial/builder";
+import {
+  DESKS,
+  GRID,
+  KIT,
+  KIT_LABELS,
+  PLAN_LIMITS,
+  applyPlan,
+  defaultPlan,
+  mirrorPlan,
+  mirrorer,
+  resizePlan,
+  resizer,
+  sanitizePlan,
+  turnPlan,
+  turner,
+  type FloorPlan,
+  type Reshape,
+} from "@/lib/spatial/verlet-site";
 import {
   Trash2,
   Table2,
@@ -38,6 +56,11 @@ import {
   Crosshair,
   Map,
   Minus,
+  Monitor,
+  Ruler,
+  Sofa,
+  Download,
+  FlipHorizontal2,
   MousePointer2,
   Move,
   Plus,
@@ -51,6 +74,11 @@ import {
 import { VerletLogo } from "@/components/ui/verlet-logo";
 import {
   clampPlacement,
+  isFurniture,
+  isShelf,
+  planId,
+  DESK_PREFIX,
+  PIECE_PREFIX,
   readLayout,
   type Layout,
   type SpatialShelf,
@@ -58,7 +86,9 @@ import {
 } from "@/lib/spatial/model";
 import { readDraft, type SpatialDraft } from "@/lib/spatial/draft";
 import type { createOffice } from "./office-scene";
+import { FloorSketch } from "./floor-sketch";
 import "./workspace.css";
+import { saveDesks, saveFloorPlan } from "@/app/(spatial)/space/actions";
 
 import { BoxInspector } from "./box-inspector";
 import { ScanPanel } from "./scan-panel";
@@ -93,7 +123,22 @@ export function SpatialWorkspace({
   userId,
   profile,
   catalog,
+  plan: roomPlan,
+  canEditRoom = false,
+  canMoveDesks = false,
+  deskOwners = {},
+  people = [],
 }: {
+  /** The room in force: its size, door, furniture and where shelves stand. */
+  plan: FloorPlan;
+  /** This person may change the room for everyone (admin or stock manager). */
+  canEditRoom?: boolean;
+  /** Desks can be moved at all (the API keeps a floor plan). */
+  canMoveDesks?: boolean;
+  /** Who sits at each desk, by the plan's desk id. */
+  deskOwners?: Record<string, string | null>;
+  /** People in the office, for naming who sits where. */
+  people?: { id: string; name: string }[];
   shelves: SpatialShelf[];
   userId: string;
   profile: Capable | null;
@@ -133,10 +178,13 @@ export function SpatialWorkspace({
   const engine = useRef<Scene | null>(null);
   const cameraState = useRef<ReturnType<Scene["snapshot"]> | null>(null);
   const upload = useRef<HTMLInputElement>(null);
+  const roomFile = useRef<HTMLInputElement>(null);
   const [layout, setLayout] = useState<Layout>({});
   const [extras, setExtras] = useState<SpatialShelf[]>([]);
   const [itemEdits, setItemEdits] = useState<SpatialDraft["items"]>({});
   const [boxMap, setBoxMap] = useState<BoxMap>({});
+  // Desk id -> who sits there, for changes not yet saved.
+  const [owners, setOwners] = useState<Record<string, string | null>>({});
   const [previewTarget, setPreviewTarget] = useState<string | null>(null);
   const previewReturn = useRef<ReturnType<Scene["snapshot"]> | null>(null);
   const [selectedBox, setSelectedBox] = useState<string | null>(null);
@@ -154,7 +202,14 @@ export function SpatialWorkspace({
     () => {},
   );
   const boxMoveRef = useRef<(id: string, slot: number) => void>(() => {});
-  const [builderTab, setBuilderTab] = useState<"add" | "objects">("add");
+  const [builderTab, setBuilderTab] = useState<"add" | "objects" | "room">("add");
+  // The room being edited. It follows the saved plan until something is changed.
+  const [savedPlan, setSavedPlan] = useState(roomPlan);
+  const [draft, setDraft] = useState(roomPlan);
+  if (savedPlan !== roomPlan) {
+    setSavedPlan(roomPlan);
+    setDraft(roomPlan);
+  }
   const [hidden, setHidden] = useState<string[]>([]);
   const editRef = useRef(false);
   const moveRef = useRef<(id: string, x: number, z: number) => void>(() => {});
@@ -164,12 +219,13 @@ export function SpatialWorkspace({
       extras: SpatialShelf[];
       boxes: BoxMap;
       hidden: string[];
+      plan: FloorPlan;
     }[]
   >([]);
   function checkpoint() {
     setHistory((h) => [
       ...h.slice(-29),
-      { layout, extras, boxes: boxMap, hidden },
+      { layout, extras, boxes: boxMap, hidden, plan: draft },
     ]);
   }
   function undo() {
@@ -179,6 +235,7 @@ export function SpatialWorkspace({
     setLayout(previous.layout);
     setExtras(previous.extras);
     setBoxMap(previous.boxes);
+    setDraft(previous.plan);
     setHistory((h) => h.slice(0, -1));
     setSaved(false);
   }
@@ -192,25 +249,61 @@ export function SpatialWorkspace({
   const [ready, setReady] = useState(false);
   const [notice, setNotice] = useState("");
   const [saved, setSaved] = useState(false);
-  const objects = useMemo(
-    () =>
-      [...initialShelves, ...OFFICE_TABLES, ...extras]
-        .filter((s) => !hidden.includes(s.id))
-        .map((s) => {
-          const boxes = resolveSlots(
-            boxMap[s.id] ?? seedBoxes(s.id, itemEdits[s.id] ?? s.items),
-          );
-          return {
-            ...s,
-            ...layout[s.id],
-            boxes,
-            items: boxes.flatMap((b) => b.items),
-          };
-        }),
-    [initialShelves, extras, layout, itemEdits, boxMap, hidden],
-  );
+  const objects = useMemo(() => {
+    // Everything below reads the live floor, so the draft goes live first.
+    applyPlan(draft);
+    const furniture: SpatialShelf[] = draft.pieces.map((p) => {
+      const desk = p.kind === "workstation";
+      const id = `${desk ? DESK_PREFIX : PIECE_PREFIX}${p.id}`;
+      const owner = desk ? (id in owners ? owners[id] : (deskOwners[p.id] ?? null)) : null;
+      return {
+        id,
+        kind: desk ? ("desk" as const) : ("piece" as const),
+        kit: p.kind,
+        name: desk ? (DESKS.find((d) => d.id === p.id)?.name ?? "Desk") : (KIT_LABELS[p.kind] ?? "Furniture"),
+        x: p.x,
+        z: p.z,
+        rotation: (p.rot * 180) / Math.PI,
+        owner,
+        ownerName: owner ? (people.find((person) => person.id === owner)?.name ?? "Someone") : null,
+        mine: !!owner && owner === userId,
+        locked: desk ? !(canMoveDesks && (canEditRoom || owner === userId)) : !canEditRoom,
+        items: [],
+      };
+    });
+    return [
+      // Named shelves stand where the plan says, also while it is being reshaped.
+      ...initialShelves.map((s) => ({ ...s, ...draft.homes[s.name] })),
+      ...officeTables(),
+      ...furniture,
+      ...extras,
+    ]
+      .filter((s) => !hidden.includes(s.id))
+      .map((s) => {
+        const boxes = resolveSlots(
+          boxMap[s.id] ?? seedBoxes(s.id, itemEdits[s.id] ?? s.items),
+        );
+        // Furniture nobody has touched stays exactly as the plan has it.
+        const placed =
+          isFurniture(s) && !layout[s.id]
+            ? {}
+            : clampPlacement({ ...s, ...layout[s.id] }, isFurniture(s) && s.kit);
+        return {
+          ...s,
+          ...layout[s.id],
+          ...placed,
+          boxes,
+          items: boxes.flatMap((b) => b.items),
+        };
+      });
+  }, [initialShelves, draft, deskOwners, owners, people, userId, canEditRoom, canMoveDesks, extras, layout, itemEdits, boxMap, hidden]);
+  /** The furniture kit kind of an object, for keeping its footprint in the walls. */
+  const kitOf = (id: string) => {
+    const o = objects.find((o) => o.id === id);
+    return o && isFurniture(o) ? o.kit : undefined;
+  };
   const shelves = useMemo(
-    () => objects.filter((s) => s.kind !== "table"),
+    () => objects.filter(isShelf),
     [objects],
   );
   const route = useMemo(() => {
@@ -222,6 +315,7 @@ export function SpatialWorkspace({
           officeObstacles(
             shelves,
             objects.filter((s) => s.kind === "table"),
+            objects.filter(isFurniture).map((s) => ({ ...s, kit: s.kit ?? "workstation" })),
           ),
         )
       : null;
@@ -254,22 +348,27 @@ export function SpatialWorkspace({
           : [];
     },
   );
-  const storageKey = `verlet-spatial-v1:${userId}`;
+  // v3: positions are in the 24 m hall of the editable plan (v2 was the 36 m hall).
+  const storageKey = `verlet-spatial-v3:${userId}`;
 
   useEffect(() => {
     // Browser-only persistence is synchronized after hydration.
     try {
+      // Only replace state that was actually saved: a new but empty object
+      // would rebuild the whole 3D scene for nothing on every load.
+      const saved = readLayout(localStorage.getItem(storageKey));
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setLayout(readLayout(localStorage.getItem(storageKey)));
+      if (Object.keys(saved).length) setLayout(saved);
       const removed = JSON.parse(
         localStorage.getItem(`${storageKey}:hidden`) ?? "[]",
       );
-      if (Array.isArray(removed))
+      if (Array.isArray(removed) && removed.length)
         setHidden(removed.filter((id: unknown) => typeof id === "string"));
       const draft = readDraft(localStorage.getItem(`${storageKey}:draft`));
-      setExtras(draft.extras);
-      setItemEdits(draft.items);
-      setBoxMap(readBoxes(localStorage.getItem(`${storageKey}:boxes`)));
+      if (draft.extras.length) setExtras(draft.extras);
+      if (Object.keys(draft.items).length) setItemEdits(draft.items);
+      const boxes = readBoxes(localStorage.getItem(`${storageKey}:boxes`));
+      if (Object.keys(boxes).length) setBoxMap(boxes);
     } catch {
       /* Storage can be disabled. */
     }
@@ -303,7 +402,20 @@ export function SpatialWorkspace({
             setSelectedBox(boxId ?? null);
             return;
           }
-          if (objects.find((o) => o.id === id)?.kind === "table") return;
+          const picked = objects.find((o) => o.id === id);
+          if (picked?.kind === "desk" && !picked.locked) {
+            // Your desk's tag: open the plan editor on it, ready to drag or turn.
+            setArranging(false);
+            setBuilderTab("objects");
+            setRouteTarget(null);
+            setSelected(id);
+            setSelectedBox(null);
+            setScan(false);
+            setActiveTab(MAP_TAB);
+            setEdit(true);
+            setPlan(true);
+          }
+          if (!picked || !isShelf(picked)) return;
           setSelected(id);
           setSelectedBox(boxId ?? null);
           setScan(false);
@@ -401,7 +513,7 @@ export function SpatialWorkspace({
       checkpoint();
       setLayout((v) => ({
         ...v,
-        [id]: clampPlacement({ ...objects.find((s) => s.id === id)!, x, z }),
+        [id]: clampPlacement({ ...objects.find((s) => s.id === id)!, x, z }, kitOf(id)),
       }));
       setSelected(id);
       setBuilderTab("objects");
@@ -436,13 +548,164 @@ export function SpatialWorkspace({
     checkpoint();
     setLayout((value) => ({
       ...value,
-      [active.id]: clampPlacement({ ...active, ...patch }),
+      [active.id]: clampPlacement({ ...active, ...patch }, kitOf(active.id)),
     }));
     setSaved(false);
   }
+  const [savingDesks, setSavingDesks] = useState(false);
+  /** What the room's plan keeps a place for: furniture, real shelves, tables. */
+  const inPlan = (o: SpatialShelf) => isFurniture(o) || o.kind === "table" || (isShelf(o) && !o.prototype);
+  const ownDeskMoved = (o: SpatialShelf) => o.kind === "desk" && !o.locked && !!layout[o.id];
+  const roomDirty =
+    canEditRoom &&
+    (draft !== roomPlan || Object.keys(owners).length > 0 || objects.some((o) => inPlan(o) && layout[o.id]));
+  const deskDirty = roomDirty || objects.some(ownDeskMoved);
+  /** The draft with everything where it stands on the map right now. */
+  function foldPlan(): FloorPlan {
+    const at = (o: SpatialShelf) => ({ x: o.x, z: o.z, rotation: o.rotation });
+    return (
+      sanitizePlan({
+        ...draft,
+        pieces: draft.pieces.map((p) => {
+          const o = objects.find((o) => isFurniture(o) && planId(o.id) === p.id && layout[o.id]);
+          return o ? { ...p, x: o.x, z: o.z, rot: (o.rotation * Math.PI) / 180 } : p;
+        }),
+        homes: {
+          ...draft.homes,
+          ...Object.fromEntries(objects.filter((o) => isShelf(o) && !o.prototype).map((o) => [o.name, at(o)])),
+        },
+        tables: Object.fromEntries(objects.filter((o) => o.kind === "table" && !o.prototype).map((o) => [o.id, at(o)])),
+      }) ?? draft
+    );
+  }
+  /** Drop the moves the plan now holds; keep the ones for this device's own extras. */
+  const withoutPlanMoves = (v: Layout) =>
+    Object.fromEntries(Object.entries(v).filter(([id]) => !objects.some((o) => o.id === id && inPlan(o))));
+  /** Change the whole room: a new size, a quarter turn, a mirror image. */
+  function reshapeRoom(make: (plan: FloorPlan) => FloorPlan, move: (plan: FloorPlan) => Reshape) {
+    checkpoint();
+    const folded = foldPlan();
+    const reshape = move(folded);
+    const next = make(folded);
+    applyPlan(next);
+    // This device's own extra shelves move with the room.
+    const moved = extras.map((s) => ({ ...s, ...clampPlacement({ ...s, ...reshape({ ...s, ...layout[s.id] }) }) }));
+    setExtras(moved);
+    setLayout((v) => ({
+      ...withoutPlanMoves(v),
+      ...Object.fromEntries(moved.filter((s) => v[s.id]).map((s) => [s.id, { x: s.x, z: s.z, rotation: s.rotation, levels: v[s.id].levels }])),
+    }));
+    setDraft(next);
+    setSelected(null);
+    setSaved(false);
+  }
+  const resizeRoom = (length: number, width: number) =>
+    reshapeRoom(
+      (p) => resizePlan(p, length, width),
+      (p) => resizer(p, resizePlan(p, length, width)),
+    );
+  function moveDoor(by: number) {
+    checkpoint();
+    setDraft(sanitizePlan({ ...draft, doorX: draft.doorX + by }) ?? draft);
+    setSaved(false);
+  }
+  function addFurniture(kind: string) {
+    checkpoint();
+    const id = `added-${kind}-${crypto.randomUUID().slice(0, 8)}`;
+    // Just inside the door, where there is always room to put something down.
+    const next = sanitizePlan({
+      ...draft,
+      pieces: [...draft.pieces, { id, kind, x: draft.doorX + 3, z: -draft.width / 2 + 3.5, rot: 0 }],
+    });
+    if (!next) return;
+    setDraft(next);
+    setArranging(false);
+    setBuilderTab("objects");
+    setSelected(`${kind === "workstation" ? DESK_PREFIX : PIECE_PREFIX}${id}`);
+    setSelectedBox(null);
+    setSaved(false);
+    setNotice(`${KIT_LABELS[kind] ?? "Furniture"} added by the door. Drag it into place.`);
+  }
+  function resetRoom() {
+    checkpoint();
+    setDraft(defaultPlan());
+    setLayout(withoutPlanMoves);
+    setSelected(null);
+    setSaved(false);
+    setNotice("Back to the starting room. Save to keep it, or Undo.");
+  }
+  function downloadRoom() {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(foldPlan(), null, 2)], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "verlet-floor-plan.json";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+  async function loadRoom(file: File | undefined) {
+    if (!file) return;
+    try {
+      const next = sanitizePlan(JSON.parse(await file.text()));
+      if (!next) throw new Error("not a plan");
+      checkpoint();
+      setDraft(next);
+      setLayout(withoutPlanMoves);
+      setSelected(null);
+      setSaved(false);
+      setNotice("Room loaded from the file. Save to keep it.");
+    } catch {
+      setNotice("That file is not a floor plan saved from this editor.");
+    }
+  }
+  /** The shared part of a save: the room for a manager, your own desk otherwise. */
+  async function saveShared() {
+    const ownerChanges = Object.entries(owners).map(([id, user_id]) => ({ id: planId(id), user_id }));
+    const ownDesks = objects.filter(ownDeskMoved);
+    if (!roomDirty && !ownDesks.length) return;
+    setSavingDesks(true);
+    try {
+      if (canEditRoom) {
+        const result = await saveFloorPlan(foldPlan());
+        if (result.error || !result.plan) {
+          setNotice(`The room was not saved: ${result.error ?? "try again."}`);
+          return;
+        }
+        if (ownerChanges.length) {
+          const seats = await saveDesks(ownerChanges);
+          if (seats.error) {
+            setNotice(`The room is saved, but not who sits where: ${seats.error}`);
+            return;
+          }
+        }
+        setLayout(withoutPlanMoves);
+        setDraft(result.plan);
+        setNotice("Room saved for everyone.");
+      } else {
+        const result = await saveDesks(
+          ownDesks.map((o) => ({ id: planId(o.id), x: o.x, z: o.z, rotation: o.rotation })),
+        );
+        setNotice(
+          result.error
+            ? `Your desk was not saved: ${result.error}`
+            : "Your desk is saved for everyone. Other changes are saved on this device.",
+        );
+      }
+    } catch {
+      setNotice("Could not reach the server, so shared changes are not saved yet. Try Save again.");
+    } finally {
+      setSavingDesks(false);
+    }
+  }
   function save() {
     try {
-      localStorage.setItem(storageKey, JSON.stringify(layout));
+      // The room and its furniture are saved for everyone below; this device
+      // keeps only its own extras and, for people who cannot edit the room,
+      // their own arrangement of the shelves.
+      const local = Object.entries(layout).filter(([id]) => {
+        const o = objects.find((o) => o.id === id);
+        return !o || !(isFurniture(o) || (canEditRoom && inPlan(o)));
+      });
+      localStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(local)));
       localStorage.setItem(`${storageKey}:hidden`, JSON.stringify(hidden));
       localStorage.setItem(
         `${storageKey}:draft`,
@@ -451,6 +714,7 @@ export function SpatialWorkspace({
       localStorage.setItem(`${storageKey}:boxes`, JSON.stringify(boxMap));
       setSaved(true);
       setNotice("Saved on this device. Inventory records are unchanged.");
+      void saveShared();
     } catch {
       setNotice(
         "Browser storage is full or unavailable. Your layout is still available in this session.",
@@ -520,7 +784,7 @@ export function SpatialWorkspace({
     setSelectedBox(id);
   }
   function addSingleBox(slot?: number) {
-    if (!active || active.kind === "table") return;
+    if (!active || !isShelf(active)) return;
     checkpoint();
     const b: StorageBox = {
       id: crypto.randomUUID(),
@@ -532,7 +796,7 @@ export function SpatialWorkspace({
     setSelectedBox(b.id);
   }
   function copySelection() {
-    if (!active) return;
+    if (!active || isFurniture(active)) return;
     const b = arranging
       ? active.boxes.find((b) => b.id === selectedBox)
       : undefined;
@@ -546,7 +810,7 @@ export function SpatialWorkspace({
   function pasteSelection() {
     if (!clipboard) return;
     if (clipboard.kind === "box") {
-      if (!active || active.kind === "table") {
+      if (!active || !isShelf(active)) {
         setNotice("Select a shelf to paste the box.");
         return;
       }
@@ -577,14 +841,24 @@ export function SpatialWorkspace({
   useEffect(() => {
     boxMoveRef.current = moveBox;
     engine.current?.arrange(
-      arranging && edit && active?.kind !== "table"
-        ? (active?.id ?? null)
+      arranging && edit && active && isShelf(active)
+        ? active.id
         : null,
       (id, slot) => boxMoveRef.current(id, slot),
     );
   });
   function removeObject() {
     if (!active) return;
+    if (isFurniture(active)) {
+      // Furniture is part of the room: it goes from the plan, for everyone, on Save.
+      if (!canEditRoom) return;
+      checkpoint();
+      setDraft({ ...draft, pieces: draft.pieces.filter((p) => p.id !== planId(active.id)) });
+      setSelected(null);
+      setSaved(false);
+      setNotice(`${active.name} removed from the room. Use Undo to bring it back.`);
+      return;
+    }
     checkpoint();
     setHidden((v) => [...v, active.id]);
     setSelected(null);
@@ -667,7 +941,10 @@ export function SpatialWorkspace({
             <VerletLogo className="size-6" />
             <div>
               <h1>Inventory</h1>
-              <span className="spatial-floor-label">Office · Ground floor</span>
+              <span className="spatial-floor-label">
+                Verlet floor · {shelves.length}{" "}
+                {shelves.length === 1 ? "shelf" : "shelves"}
+              </span>
             </div>
           </div>
           <div
@@ -787,9 +1064,12 @@ export function SpatialWorkspace({
             )}
             <div ref={host} className="spatial-canvas" />
             {!ready && !error && (
-              <div className="spatial-loading">
-                Building your space
-                <span />
+              <div className="spatial-loading" role="status">
+                <FloorSketch shelves={objects} />
+                <p className="spatial-loading-note">
+                  Building your space
+                  <span />
+                </p>
               </div>
             )}
             {error && (
@@ -914,6 +1194,19 @@ export function SpatialWorkspace({
                       <Layers size={16} />
                       Objects
                     </button>
+                    {canEditRoom && (
+                      <button
+                        role="tab"
+                        aria-selected={builderTab === "room"}
+                        onClick={() => {
+                          setBuilderTab("room");
+                          setSelected(null);
+                        }}
+                      >
+                        <Ruler size={16} />
+                        Room
+                      </button>
+                    )}
                     <button
                       title="Paste on canvas (⌘V / Ctrl+V)"
                       aria-label="Paste on canvas"
@@ -930,7 +1223,110 @@ export function SpatialWorkspace({
                       <Undo2 size={16} />
                     </button>
                   </div>
-                  {builderTab === "add" ? (
+                  {builderTab === "room" && canEditRoom ? (
+                    <div className="spatial-builder spatial-room">
+                      <p className="spatial-edit-hint">
+                        Change the room for everyone. Nothing is kept until you save.
+                      </p>
+                      {(
+                        [
+                          ["Length", "length", draft.length],
+                          ["Width", "width", draft.width],
+                        ] as const
+                      ).map(([label, key, value]) => (
+                        <div className="spatial-stepper" key={key}>
+                          <span>{label}</span>
+                          <button
+                            className="spatial-button"
+                            aria-label={`Make the room one bay ${key === "length" ? "shorter" : "narrower"}`}
+                            disabled={value <= PLAN_LIMITS[key][0]}
+                            onClick={() =>
+                              resizeRoom(
+                                key === "length" ? value - GRID : draft.length,
+                                key === "width" ? value - GRID : draft.width,
+                              )
+                            }
+                          >
+                            <Minus size={16} />
+                          </button>
+                          <output>{value} m</output>
+                          <button
+                            className="spatial-button"
+                            aria-label={`Make the room one bay ${key === "length" ? "longer" : "wider"}`}
+                            disabled={value >= PLAN_LIMITS[key][1]}
+                            onClick={() =>
+                              resizeRoom(
+                                key === "length" ? value + GRID : draft.length,
+                                key === "width" ? value + GRID : draft.width,
+                              )
+                            }
+                          >
+                            <Plus size={16} />
+                          </button>
+                        </div>
+                      ))}
+                      <p className="spatial-room-note">
+                        One step is one bay of {GRID} m.{" "}
+                        {(draft.length / GRID - 1) * (draft.width / GRID - 1)} pillars,{" "}
+                        {draft.length / GRID - 1} along the length.
+                      </p>
+                      <div className="spatial-stepper">
+                        <span>Door</span>
+                        <button className="spatial-button" aria-label="Move the door left" onClick={() => moveDoor(-0.5)}>
+                          <ArrowLeft size={16} />
+                        </button>
+                        <output>{(draft.doorX + draft.length / 2).toFixed(1)} m</output>
+                        <button className="spatial-button" aria-label="Move the door right" onClick={() => moveDoor(0.5)}>
+                          <ArrowRight size={16} />
+                        </button>
+                      </div>
+                      <p className="spatial-room-note">Measured from the left end of the yellow wall.</p>
+                      <div className="spatial-builder-actions">
+                        <button className="spatial-button" onClick={() => reshapeRoom(turnPlan, turner)}>
+                          <RotateCw size={16} />
+                          Turn layout 90°
+                        </button>
+                        <button className="spatial-button" onClick={() => reshapeRoom(mirrorPlan, () => mirrorer)}>
+                          <FlipHorizontal2 size={16} />
+                          Mirror
+                        </button>
+                      </div>
+                      <h4 className="spatial-room-heading">Add furniture</h4>
+                      <div className="spatial-kit">
+                        {Object.keys(KIT).map((kind) => (
+                          <button key={kind} onClick={() => addFurniture(kind)}>
+                            <Plus size={14} />
+                            {KIT_LABELS[kind]}
+                          </button>
+                        ))}
+                      </div>
+                      <h4 className="spatial-room-heading">Keep or share</h4>
+                      <div className="spatial-builder-actions">
+                        <button className="spatial-button" onClick={downloadRoom}>
+                          <Download size={16} />
+                          Download
+                        </button>
+                        <button className="spatial-button" onClick={() => roomFile.current?.click()}>
+                          <Upload size={16} />
+                          Load file
+                        </button>
+                        <button className="spatial-button" onClick={resetRoom}>
+                          <RotateCcw size={16} />
+                          Start again
+                        </button>
+                      </div>
+                      <input
+                        ref={roomFile}
+                        type="file"
+                        accept="application/json,.json"
+                        hidden
+                        onChange={(e) => {
+                          void loadRoom(e.target.files?.[0]);
+                          e.target.value = "";
+                        }}
+                      />
+                    </div>
+                  ) : builderTab === "add" ? (
                     <div className="spatial-builder">
                       <p className="spatial-edit-hint">
                         Choose a block, then drag it into place.
@@ -967,20 +1363,31 @@ export function SpatialWorkspace({
                     </div>
                   ) : (
                     <div className="spatial-object-list">
-                      {objects.map((o) => (
-                        <button
-                          key={o.id}
-                          aria-pressed={selected === o.id}
-                          onClick={() => choose(o.id)}
-                        >
-                          {o.kind === "table" ? (
-                            <Table2 size={16} />
-                          ) : (
-                            <Boxes size={16} />
-                          )}
-                          <span>{o.name}</span>
-                        </button>
-                      ))}
+                      {objects
+                        .filter((o) => !o.locked)
+                        .map((o) => (
+                          <button
+                            key={o.id}
+                            aria-pressed={selected === o.id}
+                            onClick={() => choose(o.id)}
+                          >
+                            {o.kind === "piece" ? (
+                              <Sofa size={16} />
+                            ) : o.kind === "desk" ? (
+                              <Monitor size={16} />
+                            ) : o.kind === "table" ? (
+                              <Table2 size={16} />
+                            ) : (
+                              <Boxes size={16} />
+                            )}
+                            <span>
+                              {o.name}
+                              {o.kind === "desk" && o.ownerName ? (
+                                <small> · {o.mine ? "you" : o.ownerName}</small>
+                              ) : null}
+                            </span>
+                          </button>
+                        ))}
                     </div>
                   )}
                 </>
@@ -1025,7 +1432,16 @@ export function SpatialWorkspace({
                         Back to room view
                       </button>
                     )}
-                  {!selectedBox && (
+                  {active.kind === "desk" && (
+                    <p className="spatial-desk-owner">
+                      {active.mine
+                        ? "This is your desk."
+                        : active.ownerName
+                          ? `${active.ownerName} sits here.`
+                          : "Nobody sits here yet."}
+                    </p>
+                  )}
+                  {!selectedBox && !isFurniture(active) && (
                     <button
                       className="spatial-button spatial-inspect-box"
                       aria-pressed={previewTarget === active.id}
@@ -1037,7 +1453,7 @@ export function SpatialWorkspace({
                         : "Preview shelf"}
                     </button>
                   )}
-                  {!edit && (
+                  {!edit && !isFurniture(active) && (
                     <button
                       className="spatial-button spatial-directions-button"
                       onClick={() => showDirections(active.id)}
@@ -1056,30 +1472,54 @@ export function SpatialWorkspace({
                           }
                         >
                           <RotateCw size={16} />
-                          Rotate
+                          {isFurniture(active) ? "Turn 90°" : "Rotate"}
                         </button>
-                        <button
-                          className="spatial-button"
-                          onClick={copySelection}
-                        >
-                          <Copy size={16} />
-                          {arranging && selectedBox ? "Copy box" : "Copy"}
-                        </button>
-                        <button
-                          className="spatial-button"
-                          onClick={removeObject}
-                        >
-                          <Trash2 size={16} />
-                          Remove
-                        </button>
+                        {!isFurniture(active) && (
+                          <button
+                            className="spatial-button"
+                            onClick={copySelection}
+                          >
+                            <Copy size={16} />
+                            {arranging && selectedBox ? "Copy box" : "Copy"}
+                          </button>
+                        )}
+                        {(!isFurniture(active) || canEditRoom) && (
+                          <button
+                            className="spatial-button"
+                            onClick={removeObject}
+                          >
+                            <Trash2 size={16} />
+                            Remove
+                          </button>
+                        )}
                       </div>
+                      {active.kind === "desk" && canEditRoom && people.length > 0 && (
+                        <label>
+                          Who sits here
+                          <select
+                            aria-label={`Who sits at ${active.name}`}
+                            value={active.owner ?? ""}
+                            onChange={(e) => {
+                              setOwners((v) => ({ ...v, [active.id]: e.target.value || null }));
+                              setSaved(false);
+                            }}
+                          >
+                            <option value="">Nobody</option>
+                            {people.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
                       <p className="spatial-edit-hint">
                         {arranging ? (
                           "Drag boxes in 3D or use the shelf grid below."
                         ) : (
                           <>
                             Drag the whole{" "}
-                            {active.kind === "table" ? "table" : "shelf"} on the
+                            {isFurniture(active) ? active.name.toLowerCase() : active.kind === "table" ? "table" : "shelf"} on the
                             canvas. Snaps to 0.5 m.
                           </>
                         )}
@@ -1094,7 +1534,7 @@ export function SpatialWorkspace({
                           <button
                             key={name}
                             className="spatial-button"
-                            aria-label={`Move shelf ${name}`}
+                            aria-label={`Move ${isFurniture(active) ? active.name.toLowerCase() : active.kind === "table" ? "table" : "shelf"} ${name}`}
                             onClick={() =>
                               updatePlacement({
                                 x: active.x + x,
@@ -1133,7 +1573,7 @@ export function SpatialWorkspace({
                           />
                         </label>
                       )}
-                      {active.kind !== "table" && (
+                      {isShelf(active) && (
                         <>
                           <label>
                             Levels{" "}
@@ -1240,13 +1680,17 @@ export function SpatialWorkspace({
                 </section>
               ) : null}
               {(edit || active) && (
-                <button className="spatial-save" onClick={save}>
-                  {saved ? <Check size={16} /> : <Check size={16} />}{" "}
-                  {saved ? "Saved" : "Save locally"}
+                <button className="spatial-save" onClick={save} disabled={savingDesks}>
+                  <Check size={16} />{" "}
+                  {savingDesks ? "Saving…" : saved ? "Saved" : deskDirty ? "Save" : "Save locally"}
                 </button>
               )}
               <p className="spatial-local-note">
-                Prototype changes save on this device only.
+                {canEditRoom
+                  ? "The room, its furniture and where shelves stand save for everyone. Shelves you add yourself stay on this device."
+                  : objects.some((o) => o.kind === "desk" && !o.locked)
+                    ? "Your desk saves for everyone. Other changes save on this device only."
+                    : "Prototype changes save on this device only."}
               </p>
             </aside>
           )}

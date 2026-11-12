@@ -1,4 +1,5 @@
 import { clampPlacement, type Placement, type SpatialShelf } from "./model";
+import { TABLE_HOMES } from "./verlet-site";
 export function shelfLevels(requested: number | undefined, boxCount: number) {
   return Math.max(
     Math.ceil(boxCount / 4),
@@ -8,12 +9,15 @@ export function shelfLevels(requested: number | undefined, boxCount: number) {
     ),
   );
 }
-export function snapShelf(p: Placement): Placement {
-  return clampPlacement({
-    ...p,
-    x: Math.round(p.x * 2) / 2,
-    z: Math.round(p.z * 2) / 2,
-  });
+export function snapShelf(p: Placement, kit?: string | false): Placement {
+  return clampPlacement(
+    {
+      ...p,
+      x: Math.round(p.x * 2) / 2,
+      z: Math.round(p.z * 2) / 2,
+    },
+    kit,
+  );
 }
 export function emptyShelfCopy(s: SpatialShelf, id: string): SpatialShelf {
   return {
@@ -27,32 +31,18 @@ export function emptyShelfCopy(s: SpatialShelf, id: string): SpatialShelf {
   };
 }
 
-export const OFFICE_TABLES: SpatialShelf[] = [
-  {
-    id: "office-table-1",
-    name: "Desk 1",
-    x: -6,
-    z: 3.5,
-    rotation: 0,
-    kind: "table",
+/** The office's work tables, where the floor plan puts them. */
+export function officeTables(): SpatialShelf[] {
+  const names: Record<string, string> = {
+    "office-table-1": "Table 1",
+    "office-table-2": "Table 2",
+    "office-table-3": "Work table",
+  };
+  return Object.entries(TABLE_HOMES).map(([id, home]) => ({
+    id,
+    name: names[id] ?? "Table",
+    ...home,
+    kind: "table" as const,
     items: [],
-  },
-  {
-    id: "office-table-2",
-    name: "Desk 2",
-    x: -2.5,
-    z: 3.5,
-    rotation: 0,
-    kind: "table",
-    items: [],
-  },
-  {
-    id: "office-table-3",
-    name: "Work table",
-    x: 5,
-    z: 2.7,
-    rotation: 0,
-    kind: "table",
-    items: [],
-  },
-];
+  }));
+}

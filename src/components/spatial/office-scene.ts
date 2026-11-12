@@ -7,6 +7,18 @@ import { resolveSlots, occupiedLevels } from "@/lib/spatial/box-placement";
 import { shelfLevels, snapShelf } from "@/lib/spatial/builder";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { kitGeometry } from "./verlet/kit.js";
+import { AREA, ENTRANCE, KIT, OFFICES } from "@/lib/spatial/verlet-site";
+import {
+  createVerletFloor,
+  skyTexture,
+  HALL_CENTER,
+  SKY,
+  SUN_DIRECTION,
+} from "./verlet/floor";
 import {
   framingDistance,
   clampZoomDistance,
@@ -14,7 +26,22 @@ import {
   type ObjectPose,
 } from "@/lib/spatial/camera";
 import type { FloorPoint } from "@/lib/spatial/directions";
-import { type SpatialShelf } from "@/lib/spatial/model";
+import { isFurniture, type SpatialShelf } from "@/lib/spatial/model";
+
+/** Inventory shelves are drawn as the stockroom's pine units: 2 m wide, four
+ *  boxes per level (the slot order matches lib/spatial/box-placement). */
+const SHELF = {
+  w: 2.0,
+  d: 0.5,
+  base: 0.12,
+  pitch: 0.58,
+  colStep: 0.5,
+  boxW: 0.42,
+  boxH: 0.38,
+  boxD: 0.4,
+  colX: (col: number) => -0.75 + col * 0.5,
+  boxY: (level: number) => 0.12 + 0.03 + level * 0.58 + 0.38 / 2,
+};
 
 export function createOffice(
   host: HTMLDivElement,
@@ -23,14 +50,26 @@ export function createOffice(
   select: (id: string, boxId?: string) => void,
 ) {
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color("#e7e9e6");
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+  // Verlet's floor from the 3D floor site, on its own as a floor model.
+  const sky = skyTexture();
+  scene.background = sky;
+  scene.fog = new THREE.Fog(SKY.horizon, 90, 300);
+  const verlet = createVerletFloor();
+  scene.add(verlet.group);
+  // Overview framing: the whole hall, seen from the south-east like the 5190 site.
+  const OVERVIEW = HALL_CENTER.clone().add(new THREE.Vector3(30, 34, 40));
+  const PLAN = HALL_CENTER.clone().add(new THREE.Vector3(0, 56, 0.01));
+  const renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    powerPreference: "high-performance",
+  });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // PCFSoftShadowMap is gone in three r187; PCF with a radius gives the soft edge.
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.3;
+  renderer.toneMappingExposure = 1.0;
   renderer.domElement.setAttribute(
     "aria-label",
     "Interactive 3D office. Drag to orbit, scroll to zoom. Select a box to focus it. Use Inspect box for an unobstructed full orbit. Equivalent box controls are in the location list.",
@@ -38,62 +77,210 @@ export function createOffice(
   renderer.domElement.style.touchAction = "none";
   renderer.domElement.tabIndex = 0;
   host.appendChild(renderer.domElement);
-  const camera = new THREE.PerspectiveCamera(36, 1, 0.02, 200);
-  camera.position.set(22, 23, 27);
+  const camera = new THREE.PerspectiveCamera(36, 1, 0.02, 320);
+  camera.position.copy(OVERVIEW);
   const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.set(0, 0, 0);
+  controls.target.copy(HALL_CENTER);
   controls.enableDamping = true;
   controls.minDistance = 0.45;
-  controls.maxDistance = 80;
+  controls.maxDistance = clampZoomDistance(Infinity);
   controls.minPolarAngle = 0.01;
-  controls.maxPolarAngle = Math.PI - 0.01;
+  // Stay above the floor; only Inspect box (an isolated box) orbits fully.
+  const ABOVE_GROUND = Math.PI * 0.47;
+  controls.maxPolarAngle = ABOVE_GROUND;
   controls.minAzimuthAngle = -Infinity;
   controls.maxAzimuthAngle = Infinity;
   controls.update();
-  scene.add(new THREE.HemisphereLight(0xffffff, 0xa6afa7, 2.7));
-  const sun = new THREE.DirectionalLight(0xfff5e6, 4);
-  sun.position.set(-9, 22, 12);
+
+  // ---- light: a soft studio environment for reflections and fill, one warm sun for shadows
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const room = new RoomEnvironment();
+  const environment = pmrem.fromScene(room, 0.04).texture;
+  room.dispose();
+  pmrem.dispose();
+  scene.environment = environment;
+  scene.environmentIntensity = 0.45;
+  scene.add(new THREE.HemisphereLight(0xdfe6ef, 0x7a6a58, 0.75));
+  // One sun, its shadow box fitted round the whole hall.
+  const sun = new THREE.DirectionalLight(0xfff0dc, 2.7);
+  sun.target.position.copy(HALL_CENTER);
+  sun.position.copy(HALL_CENTER).addScaledVector(SUN_DIRECTION, 90);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -18;
-  sun.shadow.camera.right = 18;
-  sun.shadow.camera.top = 18;
-  sun.shadow.camera.bottom = -18;
+  const reach = Math.hypot(AREA.x1 - AREA.x0, AREA.z1 - OFFICES.z0) / 2 + 3;
+  sun.shadow.camera.left = -reach;
+  sun.shadow.camera.right = reach;
+  sun.shadow.camera.top = reach;
+  sun.shadow.camera.bottom = -reach;
+  sun.shadow.camera.near = 20;
+  sun.shadow.camera.far = 170;
+  sun.shadow.bias = -0.0004;
   sun.shadow.normalBias = 0.03;
-  scene.add(sun);
-  const materials = new Map<string, THREE.MeshStandardMaterial>();
-  function material(color: string) {
-    if (!materials.has(color))
-      materials.set(
-        color,
-        new THREE.MeshStandardMaterial({
-          color,
-          roughness: 0.78,
-          metalness: 0.04,
-        }),
-      );
-    return materials.get(color)!;
+  sun.shadow.radius = 3;
+  scene.add(sun, sun.target);
+
+  // ---- surfaces, drawn once on canvases so nothing extra is downloaded
+  const maxAniso = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+  function surface(
+    size: number,
+    draw: (ctx: CanvasRenderingContext2D, s: number) => void,
+    repeat: [number, number] = [1, 1],
+  ) {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = size;
+    draw(canvas.getContext("2d")!, size);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(...repeat);
+    texture.anisotropy = maxAniso;
+    return texture;
   }
-  function box(
-    parent: THREE.Object3D,
+  // Seeded noise so the floor looks the same on every visit.
+  let seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  function speckle(ctx: CanvasRenderingContext2D, s: number, n: number, dark: string, light: string) {
+    for (let i = 0; i < n; i++) {
+      ctx.fillStyle = rand() > 0.5 ? dark : light;
+      ctx.globalAlpha = 0.05 + rand() * 0.08;
+      const r = 0.6 + rand() * 1.6;
+      ctx.fillRect(rand() * s, rand() * s, r, r);
+    }
+    ctx.globalAlpha = 1;
+  }
+  // Kraft cardboard: near-white fibres, tinted per box by vertex colour.
+  const kraftMap = surface(256, (ctx, s) => {
+    ctx.fillStyle = "#f4efe6";
+    ctx.fillRect(0, 0, s, s);
+    for (let x = 0; x < s; x += 6) {
+      ctx.fillStyle = "rgba(120,96,64,0.06)";
+      ctx.fillRect(x, 0, 2, s);
+    }
+    speckle(ctx, s, 2600, "#6b5236", "#ffffff");
+  });
+  // Birch plywood decks and table tops.
+  const plyMap = surface(256, (ctx, s) => {
+    ctx.fillStyle = "#f1e6d2";
+    ctx.fillRect(0, 0, s, s);
+    for (let y = 0; y < s; y += 3 + rand() * 5) {
+      ctx.strokeStyle = `rgba(150,112,66,${0.05 + rand() * 0.09})`;
+      ctx.lineWidth = 0.6 + rand() * 1.2;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      for (let x = 0; x <= s; x += 32) ctx.lineTo(x, y + Math.sin(x / 40 + y) * 2.2);
+      ctx.stroke();
+    }
+    speckle(ctx, s, 900, "#8a6a44", "#fffaf0");
+  });
+  const contactMap = surface(128, (ctx, s) => {
+    const g = ctx.createRadialGradient(s / 2, s / 2, s * 0.08, s / 2, s / 2, s / 2);
+    g.addColorStop(0, "rgba(28,36,32,0.55)");
+    g.addColorStop(0.55, "rgba(28,36,32,0.22)");
+    g.addColorStop(1, "rgba(28,36,32,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, s, s);
+  });
+  contactMap.wrapS = contactMap.wrapT = THREE.ClampToEdgeWrapping;
+
+  // One material per surface type; colour comes from the vertices, so each
+  // shelf, wall or plant is a single draw call however many parts it has.
+  const kraft = new THREE.MeshStandardMaterial({ vertexColors: true, map: kraftMap, roughness: 0.92 });
+  // Racks and tables: steel and plywood in one mesh. A per-vertex "surface"
+  // attribute (metalness, roughness) picks steel or wood, and only wood takes
+  // the grain texture, so a whole rack is one draw call.
+  const rack = new THREE.MeshStandardMaterial({ vertexColors: true, map: plyMap, roughness: 1, metalness: 1 });
+  rack.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nattribute vec2 surface;\nvarying vec2 vSurface;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvSurface = surface;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying vec2 vSurface;")
+      .replace(
+        "#include <map_fragment>",
+        "#ifdef USE_MAP\n  diffuseColor *= mix(texture2D(map, vMapUv), vec4(1.0), step(0.01, vSurface.x));\n#endif",
+      )
+      .replace("#include <metalnessmap_fragment>", "#include <metalnessmap_fragment>\nmetalnessFactor *= vSurface.x;")
+      .replace("#include <roughnessmap_fragment>", "#include <roughnessmap_fragment>\nroughnessFactor *= vSurface.y;");
+  };
+  function surfaced(g: THREE.BufferGeometry, metal: boolean) {
+    const v = new Float32Array(g.attributes.position.count * 2);
+    for (let i = 0; i < v.length; i += 2) {
+      v[i] = metal ? 0.55 : 0;
+      v[i + 1] = metal ? 0.4 : 0.62;
+    }
+    g.setAttribute("surface", new THREE.BufferAttribute(v, 2));
+    return g;
+  }
+  const contact = new THREE.MeshBasicMaterial({
+    map: contactMap,
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+  });
+
+  const euler = new THREE.Euler(0, 0, 0, "YXZ");
+  const matrix = new THREE.Matrix4();
+  const quat = new THREE.Quaternion();
+  /** A geometry part placed in its parent's space and painted one colour. */
+  function part(
+    geometry: THREE.BufferGeometry,
+    color: string,
     x: number,
     y: number,
     z: number,
-    w: number,
-    h: number,
-    d: number,
-    color: string,
+    rx = 0,
+    ry = 0,
+    rz = 0,
+    sx = 1,
+    sy = 1,
+    sz = 1,
   ) {
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(w, h, d),
-      material(color),
+    const g = geometry.index ? geometry.toNonIndexed() : geometry;
+    if (g !== geometry) geometry.dispose();
+    for (const name of Object.keys(g.attributes))
+      if (!["position", "normal", "uv", "surface"].includes(name)) g.deleteAttribute(name);
+    quat.setFromEuler(euler.set(rx, ry, rz, "YXZ"));
+    g.applyMatrix4(
+      matrix.compose(new THREE.Vector3(x, y, z), quat, new THREE.Vector3(sx, sy, sz)),
     );
-    mesh.position.set(x, y, z);
-    mesh.castShadow = true;
+    const c = new THREE.Color(color);
+    const colors = new Float32Array(g.attributes.position.count * 3);
+    for (let i = 0; i < colors.length; i += 3) {
+      colors[i] = c.r;
+      colors[i + 1] = c.g;
+      colors[i + 2] = c.b;
+    }
+    g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    return g;
+  }
+  const slab = (w: number, h: number, d: number, color: string, x: number, y: number, z: number) =>
+    part(new THREE.BoxGeometry(w, h, d), color, x, y, z);
+  /** Merge parts into one mesh. */
+  function bake(
+    parent: THREE.Object3D,
+    parts: THREE.BufferGeometry[],
+    mat: THREE.Material,
+    cast = true,
+  ) {
+    const mesh = new THREE.Mesh(mergeGeometries(parts)!, mat);
+    parts.forEach((p) => p.dispose());
+    mesh.castShadow = cast;
     mesh.receiveShadow = true;
     parent.add(mesh);
     return mesh;
   }
+  function contactShadow(parent: THREE.Object3D, w: number, d: number, y = 0.05) {
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, d), contact);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.y = y;
+    mesh.renderOrder = -1;
+    parent.add(mesh);
+    return mesh;
+  }
+
+  const fontFamily =
+    getComputedStyle(document.body).fontFamily || "system-ui, sans-serif";
   function label(
     parent: THREE.Object3D,
     text: string,
@@ -102,98 +289,67 @@ export function createOffice(
     z: number,
     width = 2.5,
     dark = false,
+    sticker = false,
   ) {
     const canvas = document.createElement("canvas");
     canvas.width = 768;
     canvas.height = 128;
     const ctx = canvas.getContext("2d")!;
     ctx.fillStyle = dark ? "#222a27" : "#f8f9f5";
-    ctx.fillRect(0, 0, 768, 128);
-    ctx.font = "500 40px sans-serif";
+    ctx.beginPath();
+    ctx.roundRect(4, 4, 760, 120, sticker ? 14 : 22);
+    ctx.fill();
+    if (sticker) {
+      // A printed barcode strip, like the QR labels the app prints.
+      ctx.fillStyle = "#39433e";
+      let bx = 34;
+      while (bx < 150) {
+        const w = 2 + Math.round(rand() * 6);
+        ctx.fillRect(bx, 30, w, 68);
+        bx += w + 3 + Math.round(rand() * 4);
+      }
+    }
+    ctx.font = `600 ${sticker ? 44 : 40}px ${fontFamily}`;
     ctx.fillStyle = dark ? "#f8f9f5" : "#39433e";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
+    const left = sticker ? 170 : 24;
     ctx.fillText(
       text.length > 26 ? text.slice(0, 25) + "…" : text,
-      384,
-      64,
-      730,
+      (left + 744) / 2,
+      66,
+      744 - left,
     );
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = maxAniso;
     const mesh = new THREE.Mesh(
       new THREE.PlaneGeometry(width, width / 6),
-      new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide }),
+      new THREE.MeshBasicMaterial({
+        map: texture,
+        side: THREE.DoubleSide,
+        alphaTest: 0.5,
+      }),
     );
     mesh.position.set(x, y, z);
     parent.add(mesh);
     return mesh;
   }
-  // Cutaway architectural shell; front walls are intentionally omitted for visibility.
-  box(scene, 0, -0.3, 0, 21, 0.6, 15, "#c8cfca");
-  const floor = box(scene, 0, 0.02, 0, 20, 0.05, 14, "#f2f0e9");
-  box(scene, 0, -0.7, 0, 200, 0.1, 200, "#e7e9e6");
-  const grid = new THREE.GridHelper(20, 20, 0xc4ccc6, 0xdcded8);
-  grid.position.y = 0.06;
-  grid.scale.z = 0.7;
-  scene.add(grid);
-  box(scene, 0, 1.15, -7, 20, 2.3, 0.15, "#f9f9f2");
-  box(scene, -10, 1.15, 0, 0.15, 2.3, 14, "#ebeee6");
-  box(scene, 10, 0.22, 0, 0.15, 0.44, 14, "#f9f9f2");
-  for (const x of [-5.5, 5.5]) box(scene, x, 0.22, 7, 9, 0.44, 0.15, "#f9f9f2");
-  const entrance = label(scene, "ENTRANCE", 0, 0.09, 6.5, 2.2, true);
-  entrance.rotation.x = -Math.PI / 2;
+
+  // The hall's tiles are the floor; this stands in for the old floor slab,
+  // which a custom floor-plan image used to hide.
+  const floor = new THREE.Object3D();
+  const FLOOR_Y = 0.012;
+
+  // Directions start at the pink marker just inside the hall's glass door.
+  const entrance = label(scene, "ENTRANCE", ENTRANCE.x, FLOOR_Y + 0.01, ENTRANCE.z + 0.75, 2.2, true);
+  entrance.rotation.set(-Math.PI / 2, 0, 0);
   const startMarker = new THREE.Mesh(
     new THREE.CylinderGeometry(0.18, 0.18, 0.035, 24),
     new THREE.MeshBasicMaterial({ color: 0xdc7298 }),
   );
-  startMarker.position.set(0, 0.1, 6);
+  startMarker.position.set(ENTRANCE.x, 0.03, ENTRANCE.z);
   scene.add(startMarker);
-  // Glass partition, with a walk-through opening.
-  const glass = new THREE.MeshStandardMaterial({
-    color: 0xc9ddd6,
-    transparent: true,
-    opacity: 0.28,
-    roughness: 0.12,
-    metalness: 0.1,
-  });
-  for (const x of [-6.5, -2.5]) {
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(3.5, 2.1, 0.08), glass);
-    panel.position.set(x, 1.1, 0.8);
-    scene.add(panel);
-    for (const dx of [-1.75, 1.75])
-      box(scene, x + dx, 1.1, 0.8, 0.05, 2.2, 0.08, "#7e8c83");
-  }
-  const roomLabel = label(scene, "STORAGE / 01", -4.4, 0.08, -5.8, 3.2);
-  roomLabel.rotation.x = -Math.PI / 2;
-  const labLabel = label(scene, "WORKSPACE / 02", 4.7, 0.08, 5.6, 3.5);
-  labLabel.rotation.x = -Math.PI / 2;
-  function plant(x: number, z: number) {
-    const pot = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.35, 0.25, 0.6, 16),
-      material("#c4c5ba"),
-    );
-    pot.position.set(x, 0.3, z);
-    pot.castShadow = true;
-    scene.add(pot);
-    for (let i = 0; i < 4; i++) {
-      const leaf = new THREE.Mesh(
-        new THREE.SphereGeometry(0.32, 12, 8),
-        material(i % 2 ? "#78947c" : "#4d7057"),
-      );
-      leaf.scale.set(0.7, 1.6, 0.7);
-      leaf.position.set(
-        x + Math.sin(i * 2) * 0.2,
-        0.9 + i * 0.14,
-        z + Math.cos(i * 2) * 0.2,
-      );
-      leaf.castShadow = true;
-      scene.add(leaf);
-    }
-  }
-  plant(-8.8, 5.7);
-  plant(8.8, -5.7);
-  plant(8.8, 5.7);
 
   const targets: THREE.Object3D[] = [];
   const boxTargets: THREE.Object3D[] = [];
@@ -201,33 +357,90 @@ export function createOffice(
   const boxOutlines = new Map<string, THREE.LineSegments>();
   const rings = new Map<string, THREE.Mesh>();
   const groups = new Map<string, THREE.Group>();
+  // Tables are the 5190 workbench; shelves are its pine shelving units.
+  const kitMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0.05 });
+  const PINE = "#d6a56b", PINE_BACK = "#bf9058";
+  // Furniture (desks and every other piece of the plan) is one instanced
+  // mesh per kind, so a whole floor of it costs a handful of draw calls. Each
+  // piece has a group that holds its place, its ring and its hit box, and the
+  // instance follows the group while it is dragged.
+  const furnitureMat = verlet.furnitureMaterial();
+  const furniture = new Map<string, { mesh: THREE.InstancedMesh; kind: string; index: number }>();
+  const byKind = new Map<string, SpatialShelf[]>();
+  for (const s of shelves)
+    if (isFurniture(s) && s.kit && s.kit in KIT) byKind.set(s.kit, [...(byKind.get(s.kit) ?? []), s]);
+  byKind.forEach((list, kind) => {
+    const mesh = new THREE.InstancedMesh(kitGeometry(kind).clone(), furnitureMat, list.length);
+    mesh.castShadow = mesh.receiveShadow = true;
+    scene.add(mesh);
+    list.forEach((s, index) => furniture.set(s.id, { mesh, kind, index }));
+  });
+  /** Hit boxes of furniture: only pickable while the plan is being edited. */
+  const furnitureTargets: THREE.Object3D[] = [];
+  function syncDesk(id: string) {
+    const group = groups.get(id), piece = furniture.get(id);
+    if (!group || !piece) return;
+    group.updateMatrix();
+    piece.mesh.setMatrixAt(piece.index, group.matrix);
+    piece.mesh.instanceMatrix.needsUpdate = true;
+    piece.mesh.computeBoundingSphere();
+  }
   for (const shelf of shelves) {
     const group = new THREE.Group();
     group.position.set(shelf.x, 0, shelf.z);
     group.rotation.y = THREE.MathUtils.degToRad(shelf.rotation);
     scene.add(group);
     groups.set(shelf.id, group);
-    if (shelf.kind === "table") {
-      box(group, 0, 1, 0, 2.6, 0.13, 1.3, "#c6b79d");
-      for (const x of [-1.1, 1.1])
-        for (const z of [-0.5, 0.5])
-          box(group, x, 0.5, z, 0.08, 1, 0.08, "#52625a");
+    if (isFurniture(shelf)) {
+      const [w, d] = KIT[shelf.kit ?? ""] ?? [1, 1];
+      syncDesk(shelf.id);
+      group.userData.tagY = 1.5;
+      group.userData.kit = shelf.kit;
+      // Lit only when it is yours, hovered or selected, so a floor of furniture stays quiet.
       const ring = new THREE.Mesh(
-        new THREE.BoxGeometry(2.9, 0.035, 1.6),
+        new THREE.BoxGeometry(w + 0.3, 0.035, d + 0.3),
+        new THREE.MeshBasicMaterial({ color: 0x9db7a4, transparent: true, opacity: 0.2 }),
+      );
+      ring.position.y = 0.02;
+      ring.userData.desk = true;
+      ring.userData.mine = !!shelf.mine;
+      ring.visible = !!shelf.mine;
+      group.add(ring);
+      rings.set(shelf.id, ring);
+      // Only what this person may move can be picked up.
+      if (!shelf.locked) {
+        const hit = new THREE.Mesh(
+          new THREE.BoxGeometry(w + 0.1, 1.2, d + 0.1),
+          new THREE.MeshBasicMaterial({ visible: false }),
+        );
+        hit.position.y = 0.6;
+        hit.userData.shelfId = shelf.id;
+        group.add(hit);
+        furnitureTargets.push(hit);
+      }
+      continue;
+    }
+    if (shelf.kind === "table") {
+      const bench = new THREE.Mesh(kitGeometry("bench").clone(), kitMat);
+      bench.castShadow = bench.receiveShadow = true;
+      group.add(bench);
+      contactShadow(group, 2.6, 1.5, FLOOR_Y);
+      const ring = new THREE.Mesh(
+        new THREE.BoxGeometry(2.4, 0.035, 1.4),
         new THREE.MeshBasicMaterial({
           color: 0x9db7a4,
           transparent: true,
           opacity: 0.2,
         }),
       );
-      ring.position.y = 0.09;
+      ring.position.y = 0.02;
       group.add(ring);
       rings.set(shelf.id, ring);
       const hit = new THREE.Mesh(
-        new THREE.BoxGeometry(2.8, 1.2, 1.5),
+        new THREE.BoxGeometry(2.2, 1.0, 1.2),
         new THREE.MeshBasicMaterial({ visible: false }),
       );
-      hit.position.y = 0.6;
+      hit.position.y = 0.5;
       hit.userData.shelfId = shelf.id;
       group.add(hit);
       targets.push(hit);
@@ -238,41 +451,46 @@ export function createOffice(
       shelfLevels(shelf.levels, boxes.length),
       occupiedLevels(boxes),
     );
-    const top = 0.26 + levels * 0.78;
-    for (const x of [-1.28, 1.28])
-      for (const z of [-0.48, 0.48])
-        box(group, x, top / 2, z, 0.07, top + 0.1, 0.07, "#52625a");
+    const top = SHELF.base + levels * SHELF.pitch + 0.05;
+    // A pine shelving unit like the stockroom's: posts, boards and a back panel.
+    const unit: THREE.BufferGeometry[] = [];
+    const px = SHELF.w / 2 - 0.025, pz = SHELF.d / 2 - 0.025;
+    for (const x of [-px, px])
+      for (const z of [-pz, pz]) unit.push(slab(0.05, top, 0.05, PINE, x, top / 2, z));
     for (let level = 0; level <= levels; level++)
-      box(group, 0, 0.25 + level * 0.78, 0, 2.65, 0.08, 1.06, "#7b8c80");
+      unit.push(slab(SHELF.w - 0.04, 0.03, SHELF.d, PINE, 0, SHELF.base + level * SHELF.pitch, 0));
+    unit.push(slab(SHELF.w, top, 0.015, PINE_BACK, 0, top / 2, -SHELF.d / 2 + 0.01));
+    bake(group, unit.map((g) => surfaced(g, false)), rack);
+    contactShadow(group, SHELF.w + 0.6, SHELF.d + 0.7, FLOOR_Y);
     const quantity = shelf.items.reduce((n, item) => n + item.quantity, 0);
     boxes.forEach((storage) => {
       const level = Math.floor(storage.slot / 4),
         col = storage.slot % 4;
-      const x = -0.94 + col * 0.62,
-        y = 0.54 + level * 0.78;
       const packageGroup = new THREE.Group();
-      packageGroup.position.set(x, y, 0);
+      packageGroup.position.set(SHELF.colX(col), SHELF.boxY(level), 0);
       group.add(packageGroup);
       packages.set(storage.id, packageGroup);
       const full = storage.items.some((item) => item.quantity > 0);
-      const packageMesh = box(
+      // Kraft for boxes holding stock, a paler bleached board for empty ones.
+      const tint = full ? "#c9a476" : "#ddd5c6";
+      const { boxW: w, boxH: h, boxD: d } = SHELF;
+      const packageMesh = bake(
         packageGroup,
-        0,
-        0,
-        0,
-        0.48,
-        0.48,
-        0.7,
-        full ? "#b4c3a8" : "#c4b49a",
+        [
+          part(new RoundedBoxGeometry(w, h, d, 2, 0.014), tint, 0, 0, 0),
+          slab(0.065, 0.006, d + 0.004, "#b08b5c", 0, h / 2 + 0.001, 0),
+          slab(0.065, 0.12, 0.006, "#b08b5c", 0, h / 2 - 0.06, d / 2 + 0.001),
+        ],
+        kraft,
+        false,
       );
       packageMesh.userData = { shelfId: shelf.id, boxId: storage.id };
       boxTargets.push(packageMesh);
-      const sticker = label(packageGroup, storage.name, 0, 0, 0.357, 0.43);
+      const sticker = label(packageGroup, storage.name, 0, -0.04, d / 2 + 0.006, w * 0.86, false, true);
       sticker.userData = { shelfId: shelf.id, boxId: storage.id };
       boxTargets.push(sticker);
-      box(packageGroup, 0, 0.244, 0, 0.07, 0.01, 0.7, "#a39680");
       const outline = new THREE.LineSegments(
-        new THREE.EdgesGeometry(new THREE.BoxGeometry(0.5, 0.5, 0.72)),
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(SHELF.boxW + 0.02, SHELF.boxH + 0.02, SHELF.boxD + 0.02)),
         new THREE.LineBasicMaterial({ color: 0xef83ad }),
       );
       outline.userData.boxId = storage.id;
@@ -280,21 +498,22 @@ export function createOffice(
       packageGroup.add(outline);
       boxOutlines.set(storage.id, outline);
     });
-    label(group, shelf.name, 0, top + 0.29, 0.05, 2.7, true);
+    label(group, shelf.name, 0, top + 0.2, 0, SHELF.w - 0.1, true);
+    group.userData.tagY = top + 0.55;
     const ring = new THREE.Mesh(
-      new THREE.BoxGeometry(3.05, 0.035, 1.5),
+      new THREE.BoxGeometry(SHELF.w + 0.5, 0.035, SHELF.d + 0.9),
       new THREE.MeshBasicMaterial({
         color: quantity ? 0x9db7a4 : 0xe9bc79,
         transparent: true,
         opacity: 0.3,
       }),
     );
-    ring.position.y = 0.09;
+    ring.position.y = 0.02;
     group.add(ring);
     rings.set(shelf.id, ring);
     // A transparent hit volume keeps small struts and empty shelves easy to select.
     const hit = new THREE.Mesh(
-      new THREE.BoxGeometry(2.9, top + 0.45, 1.3),
+      new THREE.BoxGeometry(SHELF.w + 0.2, top + 0.35, SHELF.d + 0.5),
       new THREE.MeshBasicMaterial({ visible: false }),
     );
     hit.position.y = top / 2;
@@ -302,6 +521,119 @@ export function createOffice(
     group.add(hit);
     targets.push(hit);
   }
+  // ---- name tags: every inventory shelf is named and clickable from any view,
+  // so you never have to hunt for which piece of furniture holds your stock.
+  const tagLayer = document.createElement("div");
+  tagLayer.className = "spatial-tags";
+  host.appendChild(tagLayer);
+  let selectedShelf: string | null = null;
+  let hoveredShelf: string | null = null;
+  const tags = new Map<string, { el: HTMLButtonElement; group: THREE.Group; w: number; h: number }>();
+  for (const shelf of shelves) {
+    const group = groups.get(shelf.id);
+    // Tables have no tag; of the desks, only your own does.
+    if (shelf.kind === "table" || !group) continue;
+    if (shelf.kind === "piece" || (shelf.kind === "desk" && !shelf.mine)) continue;
+    const boxes = shelf.boxes?.length ?? 0;
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className = "spatial-tag";
+    const name = document.createElement("span");
+    if (shelf.kind === "desk") {
+      el.classList.add("is-desk");
+      name.textContent = "Your desk";
+      el.append(name);
+      el.setAttribute("aria-label", `Your desk, ${shelf.name}. Move or turn it`);
+    } else {
+      if (!shelf.items.some((i) => i.quantity > 0)) el.classList.add("is-empty");
+      name.textContent = shelf.name;
+      const count = document.createElement("span");
+      count.className = "spatial-tag-count";
+      count.textContent = String(boxes);
+      el.append(name, count);
+      el.setAttribute("aria-label", `Open ${shelf.name}, ${boxes} ${boxes === 1 ? "box" : "boxes"}`);
+    }
+    el.addEventListener("click", (event) => {
+      event.stopPropagation();
+      select(shelf.id);
+    });
+    el.addEventListener("pointerenter", () => setHover(shelf.id));
+    el.addEventListener("pointerleave", () => setHover(null));
+    tagLayer.appendChild(el);
+    tags.set(shelf.id, { el, group, w: 0, h: 0 });
+  }
+  let viewW = 1, viewH = 1;
+  const tagPoint = new THREE.Vector3();
+  const placed: [number, number, number, number][] = [];
+  function placeTags() {
+    const show = !detail && !inspection;
+    tagLayer.classList.toggle("is-off", !show);
+    if (!show) return;
+    // Nearest and selected first; a tag that would overlap one already placed
+    // waits until you zoom in, so the view never turns into a pile of labels.
+    const order = [...tags.entries()]
+      .map(([id, t]) => {
+        t.group.getWorldPosition(tagPoint);
+        tagPoint.y += t.group.userData.tagY ?? 2;
+        const distance = tagPoint.distanceTo(camera.position);
+        tagPoint.project(camera);
+        return { id, t, x: (tagPoint.x + 1) * 0.5 * viewW, y: (1 - tagPoint.y) * 0.5 * viewH, z: tagPoint.z, distance };
+      })
+      .sort((a, b) =>
+        Number(b.id === selectedShelf) - Number(a.id === selectedShelf) ||
+        Number(b.id === hoveredShelf) - Number(a.id === hoveredShelf) ||
+        a.distance - b.distance,
+      );
+    placed.length = 0;
+    // Every shelf keeps a reachable spot over it: no full tag may cover another
+    // shelf's dot.
+    const anchors = order.filter((o) => o.z <= 1).map((o) => ({ id: o.id, x: o.x, y: o.y - 7 }));
+    for (const { id, t, x, y, z } of order) {
+      if (!t.w) {
+        t.w = t.el.offsetWidth;
+        t.h = t.el.offsetHeight;
+      }
+      const left = x - t.w / 2, top = y - t.h - 4;
+      const off = z > 1 || x < 0 || x > viewW || y < 0 || y > viewH;
+      const clash =
+        placed.some(([l, tp, r, b]) => left < r && left + t.w > l && top < b && top + t.h > tp) ||
+        anchors.some((a) => a.id !== id && a.x > left - 8 && a.x < left + t.w + 8 && a.y > top - 8 && a.y < top + t.h + 8);
+      const full = !clash || id === selectedShelf || id === hoveredShelf;
+      t.el.classList.toggle("is-hidden", off);
+      // A tag with no room shrinks to a dot over its shelf; hover or zoom shows the name.
+      t.el.classList.toggle("is-dot", !off && !full);
+      t.el.classList.toggle("is-selected", id === selectedShelf);
+      t.el.classList.toggle("is-hover", id === hoveredShelf);
+      t.el.tabIndex = off ? -1 : 0;
+      if (off) continue;
+      if (full) {
+        placed.push([left - 4, top - 2, left + t.w + 4, top + t.h + 2]);
+        t.el.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+      } else t.el.style.transform = `translate(${Math.round(x - 7)}px, ${Math.round(y - 14)}px)`;
+    }
+  }
+  /** Selected shelf pink, hovered shelf lit, the rest tinted by stock. */
+  function paintRings() {
+    rings.forEach((ring, key) => {
+      const m = ring.material as THREE.MeshBasicMaterial;
+      const chosen = key === selectedShelf, lit = key === hoveredShelf;
+      m.opacity = chosen ? 0.8 : lit ? 0.55 : ring.userData.mine ? 0.45 : 0.2;
+      if (ring.userData.desk) ring.visible = chosen || lit || ring.userData.mine;
+      m.color.set(
+        chosen || lit
+          ? "#df799a"
+          : shelves.find((s) => s.id === key)?.items.some((i) => i.quantity > 0)
+            ? "#9db7a4"
+            : "#e9bc79",
+      );
+    });
+  }
+  function setHover(id: string | null) {
+    if (id === hoveredShelf) return;
+    hoveredShelf = id;
+    paintRings();
+  }
+
   const routeGroup = new THREE.Group();
   scene.add(routeGroup);
   function clearRoute() {
@@ -363,7 +695,6 @@ export function createOffice(
       plan.rotation.x = -Math.PI / 2;
       plan.position.y = 0.07;
       scene.add(plan);
-      grid.visible = false;
       floor.visible = false;
     });
   let detail = false;
@@ -403,6 +734,7 @@ export function createOffice(
     });
     visibility.clear();
     isolatedId = null;
+    controls.maxPolarAngle = ABOVE_GROUND;
     const source = id ? (packages.get(id) ?? groups.get(id)) : undefined;
     if (!source) return;
     scene.children.forEach((object) => {
@@ -418,45 +750,76 @@ export function createOffice(
     inspection.visible = true;
     scene.add(inspection);
     isolatedId = id;
+    controls.maxPolarAngle = Math.PI - 0.01;
   }
+  /** A camera move: eased, timed by distance, with the lens blended and a
+   *  gentle lift on long moves so the room stays in view on the way. */
   let flight: {
     start: number;
+    duration: number;
     from: THREE.Vector3;
     to: THREE.Vector3;
     targetFrom: THREE.Vector3;
     targetTo: THREE.Vector3;
+    fovFrom: number;
+    fovTo: number;
+    lift: number;
+    /** Orbit buttons: turn round the target by this angle instead of a straight line. */
+    orbit?: number;
+    done?: () => void;
   } | null = null;
+  const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
   function cancelFlight() {
     flight = null;
   }
   controls.addEventListener("start", cancelFlight);
-  function flyTo(position: THREE.Vector3, target: THREE.Vector3) {
+  function flyTo(
+    position: THREE.Vector3,
+    target: THREE.Vector3,
+    options: { fov?: number; duration?: number; orbit?: number; done?: () => void; intro?: boolean } = {},
+  ) {
     controls.enableDamping = false;
     controls.update();
     controls.enableDamping = true;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const fovTo = options.fov ?? camera.fov;
+    if ((!rendered && !options.intro) || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      flight = null;
       camera.position.copy(position);
       controls.target.copy(target);
+      camera.fov = fovTo;
+      camera.updateProjectionMatrix();
       controls.update();
+      options.done?.();
       return;
     }
+    const distance = Math.max(camera.position.distanceTo(position), controls.target.distanceTo(target));
     flight = {
       start: performance.now(),
+      duration: options.duration ?? THREE.MathUtils.clamp(450 + distance * 18, 650, 1500),
       from: camera.position.clone(),
-      to: position,
+      to: position.clone(),
       targetFrom: controls.target.clone(),
-      targetTo: target,
+      targetTo: target.clone(),
+      fovFrom: camera.fov,
+      fovTo,
+      lift: options.orbit === undefined ? Math.min(3, distance * 0.12) : 0,
+      orbit: options.orbit,
+      done: options.done,
     };
   }
+  /** False until the first frame is drawn: the opening view is placed, not flown. */
+  let rendered = false;
+  /** The first load glides in from a wider, turned view; a rebuild that
+   *  restores an earlier camera skips it. */
+  let intro = true;
   function focusObject(id: string, boxId?: string | null) {
     const inspectBox = !!boxId && isolatedId === boxId;
     const object = boxId ? packages.get(boxId) : groups.get(id);
     if (!object) return;
     focusAnchor = { id, boxId };
     detail = true;
+    atOverview = false;
     controls.enableRotate = true;
-    camera.fov = 42;
-    camera.updateProjectionMatrix();
     const sphere = bounds(object),
       target = sphere.center;
     // Keep the normal view straight-on, framing a box with its shelf around it.
@@ -474,7 +837,7 @@ export function createOffice(
       : sphere.radius;
 
     const distance = framingDistance(radius, 42, camera.aspect);
-    flyTo(target.clone().addScaledVector(direction, distance), target);
+    flyTo(target.clone().addScaledVector(direction, distance), target, { fov: 42 });
   }
   const ray = new THREE.Raycaster();
   const pointer = new THREE.Vector2();
@@ -545,6 +908,7 @@ export function createOffice(
         rings.forEach((r, key) => {
           (r.material as THREE.MeshBasicMaterial).opacity =
             key === hit.shelfId ? 0.8 : 0.2;
+          if (key === hit.shelfId) r.visible = true;
         });
         drag = {
           id: hit.shelfId,
@@ -564,7 +928,7 @@ export function createOffice(
     );
     ray.setFromCamera(pointer, camera);
     if (editing && !arrangeShelf) {
-      return ray.intersectObjects(targets)[0]?.object.userData as
+      return ray.intersectObjects([...targets, ...furnitureTargets])[0]?.object.userData as
         | { shelfId: string; boxId?: string }
         | undefined;
     }
@@ -598,6 +962,7 @@ export function createOffice(
       const g = groups.get(d.id)!;
       if (gesture) {
         g.position.copy(d.origin);
+        syncDesk(d.id);
         return;
       }
       if (Math.hypot(e.clientX - down.x, e.clientY - down.y) >= 6)
@@ -620,6 +985,7 @@ export function createOffice(
     restoreBoxDrag();
     if (drag) {
       groups.get(drag.id)?.position.copy(drag.origin);
+      syncDesk(drag.id);
       drag = null;
       controls.enabled = true;
     }
@@ -647,14 +1013,14 @@ export function createOffice(
         );
         const col = Math.max(
             0,
-            Math.min(3, Math.round((point.x + 0.94) / 0.62)),
+            Math.min(3, Math.round((point.x - SHELF.colX(0)) / SHELF.colStep)),
           ),
           level = Math.max(
             0,
-            Math.min(levels - 1, Math.round((point.y - 0.54) / 0.78)),
+            Math.min(levels - 1, Math.round((point.y - SHELF.boxY(0)) / SHELF.pitch)),
           );
         boxDrag.slot = level * 4 + col;
-        boxDrag.group.position.set(-0.94 + col * 0.62, 0.54 + level * 0.78, 0);
+        boxDrag.group.position.set(SHELF.colX(col), SHELF.boxY(level), 0);
       }
       return;
     }
@@ -663,17 +1029,26 @@ export function createOffice(
       const point = floorPoint(e);
       if (point) {
         point.sub(drag.offset);
-        const p = snapShelf({ x: point.x, z: point.z, rotation: 0 });
+        const g = groups.get(drag.id);
+        const p = snapShelf(
+          { x: point.x, z: point.z, rotation: THREE.MathUtils.radToDeg(g?.rotation.y ?? 0) },
+          g?.userData.kit,
+        );
         groups.get(drag.id)?.position.set(p.x, 0, p.z);
+        syncDesk(drag.id);
       }
       return;
     }
-    renderer.domElement.style.cursor = hitAt(e)
+    const hover = hitAt(e);
+    renderer.domElement.style.cursor = hover
       ? editing
         ? "move"
         : "pointer"
       : "grab";
+    setHover(hover?.shelfId ?? null);
   };
+  const onLeave = () => setHover(null);
+  renderer.domElement.addEventListener("pointerleave", onLeave);
   renderer.domElement.addEventListener("pointercancel", onCancel);
   renderer.domElement.addEventListener("pointerdown", onDown, true);
   renderer.domElement.addEventListener("pointerup", onUp);
@@ -734,23 +1109,67 @@ export function createOffice(
   renderer.domElement.addEventListener("drop", itemDrop);
   function fitProjection() {
     const { width, height } = host.getBoundingClientRect();
-    camera.aspect = width / Math.max(1, height);
-    const distance = camera.position.distanceTo(controls.target);
-    const fit = THREE.MathUtils.radToDeg(
-      2 * Math.atan(11 / (Math.max(1, distance) * camera.aspect)),
-    );
-    camera.fov = detail
-      ? 42
-      : Math.max(
-          controls.enableRotate ? (width < 600 ? 55 : 36) : 30,
-          Math.min(75, fit),
-        );
+    viewW = Math.max(1, width);
+    viewH = Math.max(1, height);
+    camera.aspect = viewW / viewH;
+    // A fixed lens: zooming moves the camera, it never bends the room.
+    camera.fov = detail ? 42 : !controls.enableRotate ? 30 : width < 600 ? 50 : 36;
     camera.updateProjectionMatrix();
   }
+  // The overview always shows the whole hall, whatever the map's size: it is
+  // refitted when a panel opens or the window changes, until you move it.
+  let atOverview = true;
+  const fitter = new THREE.PerspectiveCamera();
+  // the hall plus the corridor and small offices behind its north wall
+  const hallCorners = [AREA.x0, AREA.x1].flatMap((x) => [0, 3.2].flatMap((y) => [OFFICES.z0, AREA.z1].map((z) => new THREE.Vector3(x, y, z))));
+  const OVERVIEW_DIR = OVERVIEW.clone().sub(HALL_CENTER).normalize();
+  // On tall screens (phones) look along the hall from its east end, so its
+  // long side runs up the screen instead of shrinking to fit the width.
+  const OVERVIEW_TALL_DIR = new THREE.Vector3(40, 46, 12).normalize();
+  const PLAN_DIR = PLAN.clone().sub(HALL_CENTER).normalize();
+  function overviewFov(plan: boolean) {
+    return plan ? 30 : viewW < 600 ? 50 : 36;
+  }
+  function overviewPosition(plan: boolean, fov = camera.fov) {
+    fitter.fov = fov;
+    fitter.aspect = camera.aspect;
+    fitter.updateProjectionMatrix();
+    const dir = plan ? PLAN_DIR : camera.aspect < 0.9 ? OVERVIEW_TALL_DIR : OVERVIEW_DIR;
+    const fits = (d: number) => {
+      fitter.position.copy(HALL_CENTER).addScaledVector(dir, d);
+      fitter.lookAt(HALL_CENTER);
+      fitter.updateMatrixWorld();
+      // In plan view keep the room clear of the search box above it and the
+      // zoom and 3D/Plan controls below it.
+      const top = plan ? Math.min(0.9, 1 - 144 / viewH) : 0.9;
+      const bottom = plan ? Math.min(0.9, 1 - 184 / viewH) : 0.9;
+      return hallCorners.every((c) => {
+        const p = c.clone().project(fitter);
+        return Math.abs(p.x) <= 0.92 && p.y <= top && p.y >= -bottom && p.z < 1;
+      });
+    };
+    let lo = 8, hi = clampZoomDistance(Infinity);
+    for (let i = 0; i < 24; i++) {
+      const mid = (lo + hi) / 2;
+      if (fits(mid)) hi = mid;
+      else lo = mid;
+    }
+    return HALL_CENTER.clone().addScaledVector(dir, hi);
+  }
+  function frameOverview(plan: boolean) {
+    controls.target.copy(HALL_CENTER);
+    camera.position.copy(overviewPosition(plan));
+    controls.update();
+    atOverview = true;
+  }
+  controls.addEventListener("start", () => {
+    atOverview = false;
+  });
   const resize = new ResizeObserver(() => {
     const { width, height } = host.getBoundingClientRect();
     renderer.setSize(width, height);
     fitProjection();
+    if (atOverview && !detail && !flight) frameOverview(!controls.enableRotate);
     const object = focusedObject();
     if (detail && object) {
       const offset = camera.position.clone().sub(controls.target);
@@ -763,16 +1182,48 @@ export function createOffice(
   });
   resize.observe(host);
   renderer.setAnimationLoop(() => {
-    if (document.hidden) return;
+    // Nothing to draw until the map knows its size (and the intro needs it).
+    if (document.hidden || viewW <= 1) return;
+    if (intro && !rendered && atOverview) {
+      intro = false;
+      const plan = !controls.enableRotate, fov = overviewFov(plan);
+      const end = overviewPosition(plan, fov);
+      camera.position
+        .copy(end)
+        .sub(HALL_CENTER)
+        .applyAxisAngle(THREE.Object3D.DEFAULT_UP, -0.45)
+        .multiplyScalar(1.3)
+        .add(HALL_CENTER);
+      controls.update();
+      flyTo(end, HALL_CENTER, { fov, duration: 2200, intro: true, done: () => { atOverview = true; } });
+    }
     if (flight) {
-      const t = Math.min(1, (performance.now() - flight.start) / 320);
-      const eased = 1 - Math.pow(1 - t, 3);
-      camera.position.lerpVectors(flight.from, flight.to, eased);
-      controls.target.lerpVectors(flight.targetFrom, flight.targetTo, eased);
-      if (t === 1) flight = null;
+      const t = Math.min(1, (performance.now() - flight.start) / flight.duration);
+      const e = easeInOut(t);
+      controls.target.lerpVectors(flight.targetFrom, flight.targetTo, e);
+      if (flight.orbit !== undefined) {
+        const offset = flight.from.clone().sub(flight.targetFrom).applyAxisAngle(THREE.Object3D.DEFAULT_UP, flight.orbit * e);
+        camera.position.copy(controls.target).add(offset);
+      } else {
+        camera.position.lerpVectors(flight.from, flight.to, e);
+        camera.position.y += flight.lift * Math.sin(Math.PI * t);
+      }
+      if (flight.fovFrom !== flight.fovTo) {
+        camera.fov = THREE.MathUtils.lerp(flight.fovFrom, flight.fovTo, e);
+        camera.updateProjectionMatrix();
+      }
+      if (t === 1) {
+        const done = flight.done;
+        flight = null;
+        done?.();
+      }
     }
     controls.update();
+    // Close up on a shelf or box, see through any hall furniture in the way.
+    verlet.cutaway(detail ? camera.position : null, controls.target);
+    placeTags();
     renderer.render(scene, camera);
+    rendered = true;
   });
   return {
     itemDrop(callback: (move: ItemTransfer, target: BoxAddress) => void) {
@@ -801,19 +1252,8 @@ export function createOffice(
       boxOutlines.forEach((outline, key) => {
         outline.visible = key === boxId;
       });
-      rings.forEach((ring, key) => {
-        const m = ring.material as THREE.MeshBasicMaterial;
-        m.opacity = key === id ? 0.8 : 0.2;
-        m.color.set(
-          key === id
-            ? "#df799a"
-            : shelves
-                  .find((s) => s.id === key)
-                  ?.items.some((i) => i.quantity > 0)
-              ? "#9db7a4"
-              : "#e9bc79",
-        );
-      });
+      selectedShelf = id;
+      paintRings();
     },
     snapshot() {
       const object = focusedObject();
@@ -822,6 +1262,7 @@ export function createOffice(
         target: (flight?.targetTo ?? controls.target).toArray(),
         rotate: controls.enableRotate,
         detail,
+        overview: atOverview,
         anchor:
           object && focusAnchor
             ? {
@@ -840,6 +1281,7 @@ export function createOffice(
       target: number[];
       rotate: boolean;
       detail?: boolean;
+      overview?: boolean;
       anchor?: {
         id: string;
         boxId?: string | null;
@@ -847,6 +1289,7 @@ export function createOffice(
         radius: number;
       } | null;
     }) {
+      intro = false;
       detail = !!state.detail;
       focusAnchor = state.anchor
         ? { id: state.anchor.id, boxId: state.anchor.boxId }
@@ -879,38 +1322,44 @@ export function createOffice(
       controls.enableRotate = state.rotate;
       controls.update();
       fitProjection();
+      atOverview = !!state.overview && !detail;
+      if (atOverview) frameOverview(!state.rotate);
     },
     view(plan: boolean) {
       cancelFlight();
       detail = false;
       focusAnchor = null;
       isolateBox(null);
-      controls.target.set(0, 0, 0);
-      camera.position.set(
-        ...((plan ? [0, 32, 0.01] : [22, 23, 27]) as [number, number, number]),
-      );
       controls.enableRotate = !plan;
-      controls.update();
-      fitProjection();
+      const fov = overviewFov(plan);
+      flyTo(overviewPosition(plan, fov), HALL_CENTER, {
+        fov,
+        done: () => {
+          atOverview = true;
+          // A panel may have opened during the flight: settle into the new size.
+          const settled = overviewPosition(plan, overviewFov(plan));
+          if (settled.distanceTo(camera.position) > 0.5)
+            flyTo(settled, HALL_CENTER, { fov: overviewFov(plan), duration: 450 });
+        },
+      });
     },
     zoom(factor: number) {
-      cancelFlight();
-      const delta = camera.position.clone().sub(controls.target);
-      camera.position
-        .copy(controls.target)
-        .add(delta.setLength(clampZoomDistance(delta.length() * factor)));
-      controls.update();
+      atOverview = false;
+      // Repeated clicks build on where the camera is heading, not where it is.
+      const target = (flight?.targetTo ?? controls.target).clone();
+      const delta = (flight?.to ?? camera.position).clone().sub(target);
+      const position = target.clone().add(delta.setLength(clampZoomDistance(delta.length() * factor)));
+      flyTo(position, target, { duration: 420 });
     },
     focus(id: string, boxId?: string | null) {
       focusObject(id, boxId);
     },
     orbit(angle: number) {
-      cancelFlight();
+      atOverview = false;
       if (!controls.enableRotate) return;
-      const offset = camera.position.clone().sub(controls.target);
-      offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
-      camera.position.copy(controls.target).add(offset);
-      controls.update();
+      const target = controls.target.clone();
+      const position = target.clone().add(camera.position.clone().sub(target).applyAxisAngle(THREE.Object3D.DEFAULT_UP, angle));
+      flyTo(position, target, { orbit: angle, duration: 520 });
     },
     dispose() {
       disposed = true;
@@ -926,6 +1375,8 @@ export function createOffice(
       renderer.domElement.removeEventListener("pointerdown", onDown, true);
       renderer.domElement.removeEventListener("pointerup", onUp);
       renderer.domElement.removeEventListener("pointermove", onMove);
+      renderer.domElement.removeEventListener("pointerleave", onLeave);
+      tagLayer.remove();
       const textures = new Set<THREE.Texture>();
       const mats = new Set<THREE.Material>();
       scene.traverse((object) => {
@@ -948,6 +1399,9 @@ export function createOffice(
       textures.forEach((t) => t.dispose());
       mats.forEach((m) => m.dispose());
       sun.shadow.dispose();
+      verlet.dispose();
+      sky.dispose();
+      environment.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     },

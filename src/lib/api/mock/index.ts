@@ -1,5 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import fixtures from "./fixtures.json";
 
 /**
@@ -31,7 +33,44 @@ const store = {
   items: [...(recorded["/items?limit=200&offset=0"] ?? [])] as Data[],
   locations: [...(recorded["/locations"] ?? [])] as Data[],
   profiles: [...(recorded["/profiles"] ?? [])] as Data[],
+  // The floor's five zones, to start from; people rename, add and remove them.
+  departments: [
+    ["Stockroom", "#c9a15a"],
+    ["Robotics", "#5b8fd6"],
+    ["Hardware", "#d9774f"],
+    ["Software", "#5fae8b"],
+    ["Field", "#a07fd0"],
+  ].map(([name, color], i) => ({ id: `00000000-0000-4000-8000-00000000000${i + 1}`, name, color, created_at: fixtures.capturedAt })) as Data[],
+  desks: [] as Data[],
 };
+
+// The floor plan is the one thing kept on disk, so a room someone has laid out
+// by hand survives a restart. Tests and read-only hosts keep it in memory.
+const PLAN_FILE = process.env.VITEST ? null : (process.env.FLOOR_PLAN_FILE ?? join(process.cwd(), "data", "floor-plan.json"));
+let floorPlan: Data = null;
+let planRead = false;
+function readPlan(): Data {
+  if (!planRead) {
+    planRead = true;
+    try {
+      if (PLAN_FILE && existsSync(PLAN_FILE)) floorPlan = JSON.parse(readFileSync(PLAN_FILE, "utf8"));
+    } catch {
+      floorPlan = null;
+    }
+  }
+  return floorPlan;
+}
+function writePlan(plan: Data) {
+  floorPlan = plan;
+  planRead = true;
+  try {
+    if (!PLAN_FILE) return;
+    mkdirSync(dirname(PLAN_FILE), { recursive: true });
+    writeFileSync(PLAN_FILE, `${JSON.stringify(plan, null, 2)}\n`);
+  } catch {
+    /* read-only host: the plan lasts until the server restarts */
+  }
+}
 
 export class MockError extends Error {
   constructor(public status: number, message: string) {
@@ -79,6 +118,9 @@ function read(path: string): Data {
   }
   if (base === "/locations") return store.locations;
   if (base === "/profiles") return store.profiles;
+  if (base === "/departments") return store.departments;
+  if (base === "/desks") return store.desks;
+  if (base === "/floor-plan") return readPlan();
 
   const item = base.match(/^\/items\/([^/]+)$/);
   if (item && item[1] !== "categories" && item[1] !== "where") {
@@ -118,6 +160,48 @@ function write(method: string, path: string, body: Data): Data {
     const profile = { id: randomUUID(), full_name: body.full_name ?? body.email, role: body.role ?? "member", email: body.email, created_at: now, blocked: false, approval_status: "approved", has_payment_permission: false, can_manage_inventory: false, fallback_role: "none", daily_limit: 0, monthly_limit: 0, per_transaction_limit: 0, email_confirmed: !body.password ? false : true };
     store.profiles.push(profile);
     return { user: { id: profile.id, email: profile.email }, invited: !body.password };
+  }
+
+  if (method === "POST" && base === "/departments") {
+    const name = String(body.name ?? "").trim();
+    if (!name) throw new MockError(400, "A department needs a name.");
+    if (store.departments.some((d) => d.name.toLowerCase() === name.toLowerCase()))
+      throw new MockError(409, `There is already a department called ${name}.`);
+    const department = { id: randomUUID(), name, color: body.color ?? "#8a9a92", created_at: now };
+    store.departments.push(department);
+    return department;
+  }
+  const department = base.match(/^\/departments\/([0-9a-f-]{36})$/);
+  if (department) {
+    const index = store.departments.findIndex((d) => d.id === department[1]);
+    if (index === -1) throw new MockError(404, "Department not found.");
+    if (method === "DELETE") {
+      store.departments.splice(index, 1);
+      let cleared = 0;
+      store.items = store.items.map((i) => (i.department_id === department[1] ? (cleared++, { ...i, department_id: null }) : i));
+      return { cleared };
+    }
+    const name = body.name === undefined ? undefined : String(body.name).trim();
+    if (name === "") throw new MockError(400, "A department needs a name.");
+    if (name && store.departments.some((d, i) => i !== index && d.name.toLowerCase() === name.toLowerCase()))
+      throw new MockError(409, `There is already a department called ${name}.`);
+    store.departments[index] = { ...store.departments[index], ...(name ? { name } : {}), ...(body.color ? { color: body.color } : {}) };
+    return store.departments[index];
+  }
+  const desk = base.match(/^\/desks\/([\w-]{1,64})$/);
+  if (desk && method === "PUT") {
+    const saved = { id: desk[1], user_id: body.user_id ?? null };
+    store.desks = [...store.desks.filter((d) => d.id !== desk[1]), saved];
+    return saved;
+  }
+  if (base === "/floor-plan" && method === "PUT") {
+    if (!body || !Array.isArray(body.pieces)) throw new MockError(400, "That is not a floor plan.");
+    writePlan(body);
+    return body;
+  }
+  if (base === "/floor-plan" && method === "DELETE") {
+    writePlan(null);
+    return null;
   }
 
   const one = base.match(/^\/(items|locations|users|profiles)\/([0-9a-f-]{36})(?:\/(role|block|payment-settings))?$/)

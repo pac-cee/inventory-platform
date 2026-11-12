@@ -11,7 +11,7 @@ it("keeps a box inside narrow phone viewports", () => {
 });
 it("keeps zoom outside geometry and inside the far view limit", () => {
   expect(clampZoomDistance(0.01)).toBe(0.45);
-  expect(clampZoomDistance(500)).toBe(80);
+  expect(clampZoomDistance(500)).toBe(140);
 });
 it("keeps the same eye position relative to a rotated and moved shelf", () => {
   const p = followObject(

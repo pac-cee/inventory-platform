@@ -21,11 +21,12 @@ export function uncategorizedCount(items: Pick<Item, "category">[]): number {
   return items.filter((i) => categoryOf(i) === null).length;
 }
 
-/** The catalog link for a category, keeping the search; jumps to the catalog table. */
-export function categoryHref(category: string | null, query?: string): string {
+/** The catalog link for a category, keeping the search and the department; jumps to the catalog table. */
+export function categoryHref(category: string | null, query?: string, department?: string): string {
   const p = new URLSearchParams();
   if (query) p.set("q", query);
   if (category) p.set("category", category);
+  if (department) p.set("department", department);
   const qs = p.toString();
   return `/items${qs ? `?${qs}` : ""}#catalog`;
 }

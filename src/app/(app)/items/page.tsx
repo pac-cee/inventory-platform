@@ -5,6 +5,10 @@ import { serverApi, ApiError } from "@/lib/api/server";
 import { Panel } from "@/components/dashboard/widgets";
 import { AddItemDialog } from "@/components/dashboard/add-item-dialog";
 import { CategoryChips } from "@/components/dashboard/category-chips";
+import { DepartmentChips } from "@/components/dashboard/department-chips";
+import { DepartmentManager } from "@/components/dashboard/department-manager";
+import { ItemDepartmentPicker } from "@/components/dashboard/item-department-picker";
+import { NO_DEPARTMENT, departmentCounts, filterByDepartment } from "@/lib/departments";
 import {
   CategoryManager,
   type CategoryUsage,
@@ -28,13 +32,13 @@ import {
 import { Pager } from "@/components/dashboard/pager";
 import { fetchAllItems } from "@/lib/api/items";
 import { PAGE_SIZE, pageOf } from "@/lib/paginate";
-import type { ApiUser, Profile, Item, Location } from "@/lib/api/types";
+import type { ApiUser, Profile, Item, Location, Department } from "@/lib/api/types";
 import { canManageInventory } from "@/lib/roles";
 
 export default async function ItemsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; page?: string; category?: string }>;
+  searchParams: Promise<{ q?: string; page?: string; category?: string; department?: string }>;
 }) {
   const api = serverApi();
   const sp = await searchParams;
@@ -42,6 +46,8 @@ export default async function ItemsPage({
   const query = sp.q?.trim() ?? "";
   // Chosen by clicking a category above the table; exact name, or UNCATEGORIZED.
   const category = sp.category?.trim() ?? "";
+  // A department id, or NO_DEPARTMENT, chosen from the chips under the categories.
+  const department = sp.department?.trim() ?? "";
 
   // Admins only.
   let profile: Profile | null = null;
@@ -62,9 +68,11 @@ export default async function ItemsPage({
   let locations: Location[] = [];
   let categories: string[] = [];
   let categoryUsage: CategoryUsage[] = [];
+  // null when the API has no departments yet: the page then leaves them out.
+  let departments: Department[] | null = null;
   let loadError: string | null = null;
   try {
-    [items, locations, categories, categoryUsage] = await Promise.all([
+    [items, locations, categories, categoryUsage, departments] = await Promise.all([
       // P4: read-only catalog lists — cache 60s. Every page of items, since
       // the search below runs over the catalog, not over one visible page.
       fetchAllItems(api, { revalidate: 60 }),
@@ -72,12 +80,20 @@ export default async function ItemsPage({
       api.get<string[]>("/reports/categories", { revalidate: 60 }),
       // Counts, so the × can say how many items a removal would touch.
       api.get<CategoryUsage[]>("/items/categories", { revalidate: 60 }),
+      api.get<Department[]>("/departments").catch(() => null),
     ]);
   } catch (err) {
     loadError = err instanceof ApiError ? err.message : "Could not load items.";
   }
 
-  const inCategory = filterByCategory(items, category);
+  const usage = departmentCounts(items, departments ?? []);
+  const departmentName =
+    department === NO_DEPARTMENT ? "No department" : (departments?.find((d) => d.id === department)?.name ?? "");
+  const inCategory = filterByDepartment(
+    filterByCategory(items, category),
+    departments ? department : "",
+    departments ?? [],
+  );
   const matched = query
     ? inCategory.filter((item) => matchesItem(item, query))
     : inCategory;
@@ -91,10 +107,10 @@ export default async function ItemsPage({
         <div>
           <h1 className="font-serif text-[1.75rem] text-foreground">Items</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Browse the catalog, add items and manage categories.
+            Browse the catalog, add items and manage categories and departments.
           </p>
         </div>
-        <AddItemDialog locations={locations} categories={categories} />
+        <AddItemDialog locations={locations} categories={categories} departments={departments} />
       </div>
 
       {loadError ? (
@@ -105,15 +121,16 @@ export default async function ItemsPage({
 
       <div id="catalog" className="scroll-mt-20">
         <Panel
-          title={categoryName ? `Catalog · ${categoryName}` : "Catalog"}
+          title={["Catalog", categoryName, departmentName].filter(Boolean).join(" · ")}
           action={
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center justify-end gap-3">
               <span className="text-xs text-muted-foreground">
-                {query || category
+                {query || category || departmentName
                   ? `${matched.length} of ${items.length}${query ? ` · “${query}”` : ""}`
                   : `${items.length} items`}
               </span>
               <CategoryManager categories={categoryUsage} />
+              {departments ? <DepartmentManager departments={departments} counts={usage.byId} /> : null}
             </div>
           }
         >
@@ -124,14 +141,25 @@ export default async function ItemsPage({
               total={items.length}
               uncategorized={uncategorizedCount(items)}
               query={query || undefined}
+              department={department || undefined}
             />
+            {departments ? (
+              <DepartmentChips
+                departments={departments}
+                counts={usage.byId}
+                none={usage.none}
+                active={department}
+                category={category || undefined}
+                query={query || undefined}
+              />
+            ) : null}
           </div>
           {matched.length === 0 ? (
             <p className="px-5 py-10 text-center text-sm text-muted-foreground">
               {query
-                ? `No item matches “${query}”${categoryName ? ` in ${categoryName}` : ""}.`
-                : category
-                  ? `No items in ${categoryName}.`
+                ? `No item matches “${query}”${categoryName || departmentName ? ` in ${[categoryName, departmentName].filter(Boolean).join(", ")}` : ""}.`
+                : category || departmentName
+                  ? `No items in ${[categoryName, departmentName].filter(Boolean).join(", ")}.`
                   : "No items yet."}
             </p>
           ) : (
@@ -143,6 +171,7 @@ export default async function ItemsPage({
                   <TableHead className="px-5">Model</TableHead>
                   <TableHead className="px-5">SKU</TableHead>
                   <TableHead className="px-5">Specification</TableHead>
+                  {departments ? <TableHead className="px-3">Department</TableHead> : null}
                   <TableHead className="px-5 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -175,10 +204,21 @@ export default async function ItemsPage({
                       {item.sku}
                     </TableCell>
                     <TableCell className="px-5 text-muted-foreground">
-                      <span className="line-clamp-1 max-w-xs">
+                      <span className="line-clamp-1 max-w-[11rem]">
                         {item.specification ?? "—"}
                       </span>
                     </TableCell>
+                    {departments ? (
+                      <TableCell className="px-3">
+                        <ItemDepartmentPicker
+                          key={`${item.id}:${item.department_id ?? ""}`}
+                          itemId={item.id}
+                          itemName={item.name}
+                          departments={departments}
+                          value={item.department_id ?? null}
+                        />
+                      </TableCell>
+                    ) : null}
                     <TableCell className="px-5 text-right">
                       <div className="flex justify-end">
                         <RemoveItemButton id={item.id} name={item.name} />
@@ -200,6 +240,7 @@ export default async function ItemsPage({
               params={{
                 q: query || undefined,
                 category: category || undefined,
+                department: department || undefined,
               }}
               label="items"
             />
