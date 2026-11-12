@@ -1139,9 +1139,13 @@ export function createOffice(
       fitter.position.copy(HALL_CENTER).addScaledVector(dir, d);
       fitter.lookAt(HALL_CENTER);
       fitter.updateMatrixWorld();
+      // In plan view keep the room clear of the search box above it and the
+      // zoom and 3D/Plan controls below it.
+      const top = plan ? Math.min(0.9, 1 - 144 / viewH) : 0.9;
+      const bottom = plan ? Math.min(0.9, 1 - 184 / viewH) : 0.9;
       return hallCorners.every((c) => {
         const p = c.clone().project(fitter);
-        return Math.abs(p.x) <= 0.92 && Math.abs(p.y) <= 0.9 && p.z < 1;
+        return Math.abs(p.x) <= 0.92 && p.y <= top && p.y >= -bottom && p.z < 1;
       });
     };
     let lo = 8, hi = clampZoomDistance(Infinity);
